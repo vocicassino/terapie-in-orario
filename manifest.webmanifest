@@ -1,0 +1,19 @@
+{
+  "name": "Terapie in Orario",
+  "short_name": "Terapie",
+  "description": "Promemoria personale per l'assunzione delle terapie.",
+  "lang": "it",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f7f6",
+  "theme_color": "#176b5b",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

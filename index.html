@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#176b5b">
+  <meta name="description" content="Promemoria personale per l'assunzione delle terapie.">
+  <title>Terapie in Orario</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <p class="eyebrow">Promemoria personale</p>
+      <h1>Terapie in Orario</h1>
+    </div>
+    <button id="installBtn" class="icon-btn hidden" type="button">Installa</button>
+  </header>
+
+  <main>
+    <section id="view-today" class="view active" aria-labelledby="todayTitle">
+      <div class="hero-card">
+        <div>
+          <p id="todayDate" class="muted"></p>
+          <h2 id="todayTitle">Le terapie di oggi</h2>
+          <p id="nextDoseText">Aggiungi la prima terapia per iniziare.</p>
+        </div>
+        <div id="progressRing" class="progress-ring" aria-label="Progresso di oggi">
+          <strong id="progressValue">0/0</strong>
+          <span>completate</span>
+        </div>
+      </div>
+
+      <div class="section-heading">
+        <h3>Programma</h3>
+        <button id="addFromTodayBtn" class="primary small" type="button">+ Terapia</button>
+      </div>
+      <div id="todayList" class="card-list"></div>
+      <div id="todayEmpty" class="empty-state">
+        <div class="empty-icon">💊</div>
+        <h3>Nessuna terapia programmata</h3>
+        <p>Inserisci nome, dose, giorni e orari della terapia.</p>
+        <button id="emptyAddBtn" class="primary" type="button">Aggiungi terapia</button>
+      </div>
+    </section>
+
+    <section id="view-therapies" class="view" aria-labelledby="therapiesTitle">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Gestione</p>
+          <h2 id="therapiesTitle">Le mie terapie</h2>
+        </div>
+        <button id="addTherapyBtn" class="primary" type="button">+ Aggiungi</button>
+      </div>
+      <div id="therapyList" class="card-list"></div>
+    </section>
+
+    <section id="view-history" class="view" aria-labelledby="historyTitle">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Registro personale</p>
+          <h2 id="historyTitle">Storico</h2>
+        </div>
+        <button id="clearHistoryBtn" class="text-btn danger-text" type="button">Svuota</button>
+      </div>
+      <div class="filters">
+        <input id="historyDate" type="date" aria-label="Filtra lo storico per data">
+        <button id="resetHistoryFilter" class="secondary" type="button">Tutte</button>
+      </div>
+      <div id="historyList" class="card-list"></div>
+    </section>
+
+    <section id="view-settings" class="view" aria-labelledby="settingsTitle">
+      <p class="eyebrow">Configurazione</p>
+      <h2 id="settingsTitle">Impostazioni</h2>
+
+      <article class="settings-card">
+        <h3>Notifiche sul dispositivo</h3>
+        <p>Funzionano quando il browser consente l'esecuzione della PWA. Per maggiore affidabilità attiva anche Telegram.</p>
+        <div class="row-actions">
+          <button id="notificationBtn" class="primary" type="button">Attiva notifiche</button>
+          <span id="notificationStatus" class="status-pill">Non verificate</span>
+        </div>
+      </article>
+
+      <article class="settings-card">
+        <div class="switch-row">
+          <div>
+            <h3>Promemoria Telegram</h3>
+            <p>Cloudflare controlla gli orari e il bot invia il messaggio anche se la webapp è chiusa.</p>
+          </div>
+          <label class="switch">
+            <input id="telegramEnabled" type="checkbox">
+            <span></span>
+          </label>
+        </div>
+
+        <label>Indirizzo API Cloudflare
+          <input id="apiBase" type="url" placeholder="https://nome-worker.workers.dev">
+        </label>
+        <label>Chiave personale
+          <div class="input-action">
+            <input id="appKey" type="text" autocomplete="off" placeholder="Almeno 8 caratteri">
+            <button id="generateKeyBtn" class="secondary" type="button">Genera</button>
+          </div>
+        </label>
+        <label>Chat ID Telegram
+          <input id="chatId" type="text" inputmode="numeric" placeholder="Esempio: 123456789">
+        </label>
+        <label>Fuso orario
+          <input id="timezone" type="text" value="Europe/Rome">
+        </label>
+        <div class="row-actions">
+          <button id="saveCloudBtn" class="primary" type="button">Salva e sincronizza</button>
+          <button id="testTelegramBtn" class="secondary" type="button">Messaggio di prova</button>
+        </div>
+        <p id="cloudStatus" class="small-note"></p>
+      </article>
+
+      <article class="settings-card">
+        <h3>Backup</h3>
+        <p>Salva una copia delle terapie e dello storico oppure ripristina un backup precedente.</p>
+        <div class="row-actions">
+          <button id="exportBtn" class="secondary" type="button">Esporta JSON</button>
+          <label class="secondary file-label">Importa JSON
+            <input id="importInput" type="file" accept="application/json">
+          </label>
+        </div>
+      </article>
+
+      <article class="warning-card">
+        <strong>Importante</strong>
+        <p>Questa app serve soltanto come promemoria. Non modifica dosi o prescrizioni e non sostituisce le indicazioni del medico o del farmacista.</p>
+      </article>
+    </section>
+  </main>
+
+  <nav class="bottom-nav" aria-label="Navigazione principale">
+    <button class="nav-btn active" data-view="today" type="button"><span>◷</span>Oggi</button>
+    <button class="nav-btn" data-view="therapies" type="button"><span>💊</span>Terapie</button>
+    <button class="nav-btn" data-view="history" type="button"><span>✓</span>Storico</button>
+    <button class="nav-btn" data-view="settings" type="button"><span>⚙</span>Impostazioni</button>
+  </nav>
+
+  <dialog id="therapyDialog">
+    <form id="therapyForm" method="dialog">
+      <div class="dialog-header">
+        <div>
+          <p class="eyebrow">Scheda terapia</p>
+          <h2 id="dialogTitle">Nuova terapia</h2>
+        </div>
+        <button id="closeDialogBtn" class="icon-btn" value="cancel" type="button" aria-label="Chiudi">×</button>
+      </div>
+
+      <input id="therapyId" type="hidden">
+      <label>Nome farmaco o terapia *
+        <input id="therapyName" type="text" required maxlength="80" placeholder="Esempio: Farmaco">
+      </label>
+      <label>Dose / indicazione *
+        <input id="therapyDose" type="text" required maxlength="80" placeholder="Esempio: 1 compressa">
+      </label>
+
+      <fieldset>
+        <legend>Giorni della settimana *</legend>
+        <div class="days-grid">
+          <label><input type="checkbox" name="days" value="1" checked><span>Lun</span></label>
+          <label><input type="checkbox" name="days" value="2" checked><span>Mar</span></label>
+          <label><input type="checkbox" name="days" value="3" checked><span>Mer</span></label>
+          <label><input type="checkbox" name="days" value="4" checked><span>Gio</span></label>
+          <label><input type="checkbox" name="days" value="5" checked><span>Ven</span></label>
+          <label><input type="checkbox" name="days" value="6" checked><span>Sab</span></label>
+          <label><input type="checkbox" name="days" value="0" checked><span>Dom</span></label>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Orari *</legend>
+        <div id="timesList" class="times-list"></div>
+        <button id="addTimeBtn" class="secondary small" type="button">+ Aggiungi orario</button>
+      </fieldset>
+
+      <div class="two-cols">
+        <label>Data inizio
+          <input id="startDate" type="date">
+        </label>
+        <label>Data fine
+          <input id="endDate" type="date">
+        </label>
+      </div>
+
+      <label>Note
+        <textarea id="therapyNotes" rows="3" maxlength="250" placeholder="Esempio: dopo colazione"></textarea>
+      </label>
+
+      <label class="check-row">
+        <input id="therapyActive" type="checkbox" checked>
+        <span>Terapia attiva</span>
+      </label>
+
+      <div class="dialog-actions">
+        <button class="secondary" id="cancelDialogBtn" type="button">Annulla</button>
+        <button class="primary" type="submit">Salva terapia</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>
