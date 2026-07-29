@@ -1,4 +1,4 @@
-const CACHE_NAME = 'terapie-in-orario-v1';
+const CACHE_NAME = 'terapie-in-orario-v3';
 const APP_FILES = [
   './',
   './index.html',

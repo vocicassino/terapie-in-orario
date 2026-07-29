@@ -1,7 +1,11 @@
 "use strict";
 
-const STORAGE_KEY = "terapie-in-orario-v2";
+const STORAGE_KEY = "terapie-in-orario-v3";
+const LEGACY_STORAGE_KEYS = ["terapie-in-orario-v2", "terapie-in-orario-v1"];
 const NOTIFIED_KEY = "terapie-notified-v1";
+const MEDIA_DB_NAME = "terapie-in-orario-media";
+const MEDIA_DB_VERSION = 1;
+const MEDIA_STORE = "therapy-images";
 
 const defaultState = {
   therapies: [],
@@ -17,7 +21,10 @@ const defaultState = {
 
 let state = loadState();
 let deferredInstallPrompt = null;
-let currentTherapyImage = "";
+let currentTherapyImageBlob = null;
+let currentTherapyImageUrl = "";
+let removeCurrentTherapyImage = false;
+const therapyImageUrls = new Map();
 let scannerStream = null;
 let scannerTimer = null;
 let barcodeDetector = null;
@@ -27,7 +34,15 @@ const $$ = (selector) => [...document.querySelectorAll(selector)];
 
 function loadState() {
   try {
-    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY));
+    const keys = [STORAGE_KEY, ...LEGACY_STORAGE_KEYS];
+    let parsed = null;
+    for (const key of keys) {
+      const raw = localStorage.getItem(key);
+      if (raw) {
+        parsed = JSON.parse(raw);
+        break;
+      }
+    }
     return parsed ? {
       ...structuredClone(defaultState),
       ...parsed,
@@ -38,12 +53,104 @@ function loadState() {
   }
 }
 
+function serializableState() {
+  return {
+    ...state,
+    therapies: state.therapies.map(({ imageData, ...therapy }) => therapy)
+  };
+}
+
 function saveState({ sync = true } = {}) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState()));
+  } catch (error) {
+    console.error("Errore salvataggio dati", error);
+    showToast("Memoria del browser piena. Le immagini ora vengono salvate separatamente: riprova.");
+    return false;
+  }
   renderAll();
   if (sync && state.settings.telegramEnabled) {
     syncCloud(false).catch(console.error);
   }
+  return true;
+}
+
+function openMediaDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(MEDIA_DB_NAME, MEDIA_DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(MEDIA_STORE)) {
+        db.createObjectStore(MEDIA_STORE);
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function mediaRequest(mode, operation) {
+  const db = await openMediaDb();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(MEDIA_STORE, mode);
+    const store = transaction.objectStore(MEDIA_STORE);
+    const request = operation(store);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+    transaction.oncomplete = () => db.close();
+    transaction.onerror = () => reject(transaction.error);
+  });
+}
+
+function putTherapyImage(id, blob) {
+  return mediaRequest("readwrite", (store) => store.put(blob, id));
+}
+
+function getTherapyImage(id) {
+  return mediaRequest("readonly", (store) => store.get(id));
+}
+
+function deleteTherapyImage(id) {
+  return mediaRequest("readwrite", (store) => store.delete(id));
+}
+
+function dataUrlToBlob(dataUrl) {
+  const [header, encoded] = dataUrl.split(",");
+  const mime = header.match(/data:([^;]+)/)?.[1] || "image/jpeg";
+  const bytes = atob(encoded);
+  const array = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i += 1) array[i] = bytes.charCodeAt(i);
+  return new Blob([array], { type: mime });
+}
+
+function replaceTherapyImageUrl(id, blob) {
+  const previous = therapyImageUrls.get(id);
+  if (previous) URL.revokeObjectURL(previous);
+  if (blob) therapyImageUrls.set(id, URL.createObjectURL(blob));
+  else therapyImageUrls.delete(id);
+}
+
+async function loadTherapyImages() {
+  let migrated = false;
+  for (const therapy of state.therapies) {
+    try {
+      if (therapy.imageData) {
+        const blob = dataUrlToBlob(therapy.imageData);
+        await putTherapyImage(therapy.id, blob);
+        therapy.hasImage = true;
+        delete therapy.imageData;
+        migrated = true;
+      }
+      if (therapy.hasImage) {
+        const blob = await getTherapyImage(therapy.id);
+        if (blob) replaceTherapyImageUrl(therapy.id, blob);
+        else therapy.hasImage = false;
+      }
+    } catch (error) {
+      console.error("Errore caricamento immagine", error);
+    }
+  }
+  if (migrated) saveState({ sync: false });
 }
 
 function uid() {
@@ -151,7 +258,7 @@ function renderToday() {
       <article class="dose-card">
         <div>
           <div class="time-badge">${escapeHTML(dose.time)}</div>
-          ${dose.therapy.imageData ? imageHTML(dose.therapy.imageData, "med-thumb small") : ""}
+          ${therapyImageUrls.get(dose.therapy.id) ? imageHTML(therapyImageUrls.get(dose.therapy.id), "med-thumb small") : ""}
         </div>
         <div class="dose-main">
           <div class="therapy-card-top">
@@ -193,7 +300,7 @@ function renderTherapies() {
         <span class="status-pill">${therapy.active ? "Attiva" : "Sospesa"}</span>
       </div>
       <div class="therapy-card-media">
-        ${therapy.imageData ? imageHTML(therapy.imageData, "med-thumb-card") : ""}
+        ${therapyImageUrls.get(therapy.id) ? imageHTML(therapyImageUrls.get(therapy.id), "med-thumb-card") : ""}
         <div class="meta-stack">
           <div class="therapy-times">${therapy.times.map((time) => `<span class="chip">${escapeHTML(time)}</span>`).join("")}</div>
           <p class="small-note">${therapy.days.length === 7 ? "Tutti i giorni" : therapy.days.map((d) => dayNames[d]).join(", ")}</p>
@@ -258,7 +365,7 @@ function addTimeInput(value = "08:00") {
 }
 
 function updateTherapyImagePreview(src = "") {
-  currentTherapyImage = src || "";
+  currentTherapyImageUrl = src || "";
   const wrap = $("#therapyImagePreviewWrap");
   const img = $("#therapyImagePreview");
   if (src) {
@@ -270,7 +377,7 @@ function updateTherapyImagePreview(src = "") {
   }
 }
 
-function openTherapyDialog(id = "") {
+async function openTherapyDialog(id = "") {
   const therapy = state.therapies.find((item) => item.id === id);
   $("#therapyForm").reset();
   $("#timesList").innerHTML = "";
@@ -284,7 +391,9 @@ function openTherapyDialog(id = "") {
   $("#therapyNotes").value = therapy?.notes || "";
   $("#therapyActive").checked = therapy?.active ?? true;
   $("#therapyImageInput").value = "";
-  updateTherapyImagePreview(therapy?.imageData || "");
+  currentTherapyImageBlob = null;
+  removeCurrentTherapyImage = false;
+  updateTherapyImagePreview(therapy ? (therapyImageUrls.get(therapy.id) || "") : "");
   $$("input[name='days']").forEach((input) => {
     input.checked = therapy ? therapy.days.includes(Number(input.value)) : true;
   });
@@ -296,54 +405,63 @@ function closeTherapyDialog() {
   $("#therapyDialog").close();
 }
 
-async function fileToCompressedDataURL(file, maxSize = 900, quality = 0.82) {
-  const dataUrl = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
-  const img = new Image();
-  img.src = dataUrl;
-  await new Promise((resolve, reject) => {
-    img.onload = resolve;
-    img.onerror = reject;
-  });
-  const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.round(img.width * scale);
-  canvas.height = Math.round(img.height * scale);
-  const ctx = canvas.getContext("2d");
-  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-  return canvas.toDataURL("image/jpeg", quality);
+async function fileToCompressedBlob(file, maxSize = 1000, quality = 0.8) {
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const img = new Image();
+    img.src = objectUrl;
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = reject;
+    });
+    const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(img.width * scale));
+    canvas.height = Math.max(1, Math.round(img.height * scale));
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return await new Promise((resolve, reject) => {
+      canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Compressione non riuscita")), "image/jpeg", quality);
+    });
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
 }
 
 async function handleTherapyImageSelection(event) {
   const file = event.target.files?.[0];
   if (!file) return;
   try {
-    const compressed = await fileToCompressedDataURL(file);
-    updateTherapyImagePreview(compressed);
+    const compressed = await fileToCompressedBlob(file);
+    currentTherapyImageBlob = compressed;
+    removeCurrentTherapyImage = false;
+    if (currentTherapyImageUrl && currentTherapyImageUrl.startsWith("blob:")) {
+      URL.revokeObjectURL(currentTherapyImageUrl);
+    }
+    updateTherapyImagePreview(URL.createObjectURL(compressed));
     showToast("Immagine del farmaco aggiunta.");
   } catch {
     showToast("Non è stato possibile leggere l'immagine.");
   }
 }
 
-function saveTherapy(event) {
+async function saveTherapy(event) {
   event.preventDefault();
-  const id = $("#therapyId").value;
+  const oldId = $("#therapyId").value;
+  const therapyId = oldId || uid();
+  const existing = state.therapies.find((item) => item.id === oldId);
   const days = $$("input[name='days']:checked").map((el) => Number(el.value));
   const times = [...new Set($$(".therapy-time").map((el) => el.value).filter(Boolean))].sort();
   if (!days.length) return showToast("Seleziona almeno un giorno.");
   if (!times.length) return showToast("Inserisci almeno un orario.");
   if ($("#endDate").value && $("#startDate").value > $("#endDate").value) return showToast("La data finale precede quella iniziale.");
+
   const therapy = {
-    id: id || uid(),
+    id: therapyId,
     name: $("#therapyName").value.trim(),
     dose: $("#therapyDose").value.trim(),
     barcode: $("#therapyBarcode").value.trim(),
-    imageData: currentTherapyImage || "",
+    hasImage: existing?.hasImage || therapyImageUrls.has(therapyId),
     days,
     times,
     startDate: $("#startDate").value,
@@ -353,12 +471,29 @@ function saveTherapy(event) {
     updatedAt: new Date().toISOString()
   };
   if (!therapy.name || !therapy.dose) return showToast("Compila nome e dose.");
-  const index = state.therapies.findIndex((item) => item.id === id);
+
+  try {
+    if (currentTherapyImageBlob) {
+      await putTherapyImage(therapyId, currentTherapyImageBlob);
+      replaceTherapyImageUrl(therapyId, currentTherapyImageBlob);
+      therapy.hasImage = true;
+    } else if (removeCurrentTherapyImage) {
+      await deleteTherapyImage(therapyId);
+      replaceTherapyImageUrl(therapyId, null);
+      therapy.hasImage = false;
+    }
+  } catch (error) {
+    console.error(error);
+    return showToast("Non è stato possibile salvare l'immagine. Riprova.");
+  }
+
+  const index = state.therapies.findIndex((item) => item.id === oldId);
   if (index >= 0) state.therapies[index] = therapy;
   else state.therapies.push(therapy);
-  saveState();
+
+  if (!saveState()) return;
   closeTherapyDialog();
-  showToast(id ? "Terapia aggiornata." : "Terapia aggiunta.");
+  showToast(oldId ? "Terapia aggiornata." : "Terapia aggiunta.");
 }
 
 function markDose(therapyId, time, status) {
@@ -446,7 +581,7 @@ async function syncCloud(showMessage = true) {
 async function testTelegram() {
   try {
     state.settings = readSettingsForm();
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState()));
     const apiBase = normalizeApiBase(state.settings.apiBase);
     const payload = cloudPayload();
     if (!apiBase || payload.appKey.length < 8 || !payload.chatId) return showToast("Completa API, chiave personale e Chat ID.");
@@ -474,7 +609,7 @@ function readSettingsForm() {
 
 function saveCloudSettings() {
   state.settings = readSettingsForm();
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState()));
   syncCloud(true).catch((error) => {
     $("#cloudStatus").textContent = `Errore: ${error.message}`;
     showToast("Sincronizzazione non riuscita.");
@@ -582,6 +717,8 @@ function bindEvents() {
   $("#therapyImageInput").addEventListener("change", handleTherapyImageSelection);
   $("#removeTherapyImageBtn").addEventListener("click", () => {
     $("#therapyImageInput").value = "";
+    currentTherapyImageBlob = null;
+    removeCurrentTherapyImage = true;
     updateTherapyImagePreview("");
   });
   $("#scanBarcodeBtn").addEventListener("click", openBarcodeScanner);
@@ -606,6 +743,8 @@ function bindEvents() {
       const therapy = state.therapies.find((item) => item.id === id);
       if (therapy && confirm(`Eliminare la terapia “${therapy.name}”? Lo storico già registrato resterà disponibile.`)) {
         state.therapies = state.therapies.filter((item) => item.id !== id);
+        deleteTherapyImage(id).catch(console.error);
+        replaceTherapyImageUrl(id, null);
         saveState();
       }
     }
@@ -641,6 +780,7 @@ function bindEvents() {
 
 async function init() {
   bindEvents();
+  await loadTherapyImages();
   renderAll();
   if ("serviceWorker" in navigator) {
     try { await navigator.serviceWorker.register("sw.js"); } catch (error) { console.error(error); }
