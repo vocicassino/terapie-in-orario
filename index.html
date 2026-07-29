@@ -163,6 +163,26 @@
       </label>
 
       <fieldset>
+        <legend>Confezione del farmaco</legend>
+        <label>Codice a barre
+          <div class="barcode-row">
+            <input id="therapyBarcode" type="text" inputmode="numeric" maxlength="32" placeholder="EAN / UPC / altro codice a barre">
+            <button id="scanBarcodeBtn" class="secondary small" type="button">Scansiona</button>
+          </div>
+        </label>
+        <label>Immagine del farmaco
+          <input id="therapyImageInput" type="file" accept="image/*" capture="environment">
+        </label>
+        <div id="therapyImagePreviewWrap" class="image-preview-wrap hidden">
+          <img id="therapyImagePreview" alt="Anteprima immagine farmaco">
+          <div class="row-actions compact">
+            <button id="removeTherapyImageBtn" class="secondary small" type="button">Rimuovi immagine</button>
+          </div>
+        </div>
+        <p class="small-note">Puoi caricare una foto del farmaco oppure usare la scansione del codice a barre. La scansione registra il codice; il recupero automatico dell'immagine da cataloghi esterni potrà essere aggiunto in un secondo momento.</p>
+      </fieldset>
+
+      <fieldset>
         <legend>Giorni della settimana *</legend>
         <div class="days-grid">
           <label><input type="checkbox" name="days" value="1" checked><span>Lun</span></label>
@@ -204,6 +224,24 @@
         <button class="primary" type="submit">Salva terapia</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="scannerDialog">
+    <div class="scanner-box">
+      <div class="dialog-header">
+        <div>
+          <p class="eyebrow">Scansione</p>
+          <h2>Codice a barre</h2>
+        </div>
+        <button id="closeScannerBtn" class="icon-btn" type="button" aria-label="Chiudi">×</button>
+      </div>
+      <p class="small-note">Inquadra il codice a barre della confezione. Se il browser non supporta la scansione, inserisci il codice manualmente.</p>
+      <video id="scannerVideo" playsinline autoplay muted></video>
+      <p id="scannerStatus" class="small-note">Avvio fotocamera…</p>
+      <div class="dialog-actions">
+        <button id="manualCloseScannerBtn" class="secondary" type="button">Chiudi</button>
+      </div>
+    </div>
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
