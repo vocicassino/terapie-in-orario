@@ -125,7 +125,7 @@ input, textarea {
 input:focus, textarea:focus { outline: 3px solid rgba(23,107,91,.15); border-color: var(--primary); }
 .bottom-nav {
   position: fixed; z-index: 30; left: 50%; bottom: 0; transform: translateX(-50%);
-  width: min(760px, 100%); display: grid; grid-template-columns: repeat(4, 1fr);
+  width: min(760px, 100%); display: grid; grid-template-columns: repeat(5, 1fr);
   padding: 8px 8px max(8px, env(safe-area-inset-bottom));
   background: rgba(255,255,255,.96); border-top: 1px solid var(--border); backdrop-filter: blur(14px);
 }
@@ -178,7 +178,51 @@ legend { font-weight: 850; padding: 0 6px; }
   .hero-card { grid-template-columns: 1fr; }
   .progress-ring { width: 100%; height: auto; border-radius: 15px; padding: 10px; display: flex; gap: 6px; justify-content: center; border-width: 1px; }
   .dose-card { grid-template-columns: 1fr; }
-  .days-grid { grid-template-columns: repeat(4, 1fr); }
+  .days-grid { grid-template-columns: repeat(5, 1fr); }
   .two-cols { grid-template-columns: 1fr; }
   .barcode-row { grid-template-columns: 1fr; }
+}
+
+.archive-toolbar {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  margin: 14px 0 16px;
+}
+.archive-toolbar input { margin-top: 0; }
+@media (max-width: 480px) {
+  .archive-toolbar { grid-template-columns: 1fr; }
+  .bottom-nav { padding-left: 3px; padding-right: 3px; }
+  .nav-btn { font-size: .64rem; }
+  .nav-btn span { font-size: 1.08rem; }
+}
+
+
+.settings-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.settings-title-row h3 { margin-bottom: 6px; }
+.cloud-icon { font-size: 2rem; line-height: 1; }
+.cloud-backup-card {
+  border-color: #b9dcd2;
+  background: linear-gradient(180deg, #ffffff, #f7fcfa);
+}
+.backup-actions { margin-top: 14px; }
+.backup-status {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #eef4f2;
+  color: var(--muted);
+  font-size: .88rem;
+}
+.backup-status.success { background: #dff3ed; color: #116050; }
+.backup-status.error { background: #fee2e2; color: #922f2f; }
+.backup-status.working { background: #fff1bd; color: #806000; }
+@media (max-width: 480px) {
+  .backup-actions > button,
+  .backup-actions > .file-label { width: 100%; justify-content: center; text-align: center; }
 }

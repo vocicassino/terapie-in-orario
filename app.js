@@ -1,7 +1,7 @@
 "use strict";
 
-const STORAGE_KEY = "terapie-in-orario-v3";
-const LEGACY_STORAGE_KEYS = ["terapie-in-orario-v2", "terapie-in-orario-v1"];
+const STORAGE_KEY = "terapie-in-orario-v5";
+const LEGACY_STORAGE_KEYS = ["terapie-in-orario-v4", "terapie-in-orario-v3", "terapie-in-orario-v2", "terapie-in-orario-v1"];
 const NOTIFIED_KEY = "terapie-notified-v1";
 const MEDIA_DB_NAME = "terapie-in-orario-media";
 const MEDIA_DB_VERSION = 1;
@@ -15,7 +15,9 @@ const defaultState = {
     apiBase: "",
     appKey: "",
     chatId: "",
-    timezone: "Europe/Rome"
+    timezone: "Europe/Rome",
+    cloudBackupLast: "",
+    cloudBackupBytes: 0
   }
 };
 
@@ -43,11 +45,19 @@ function loadState() {
         break;
       }
     }
-    return parsed ? {
+    if (!parsed) return structuredClone(defaultState);
+    return {
       ...structuredClone(defaultState),
       ...parsed,
+      therapies: Array.isArray(parsed.therapies)
+        ? parsed.therapies.map((therapy) => ({
+            ...therapy,
+            archived: therapy.archived === true,
+            archivedAt: therapy.archivedAt || ""
+          }))
+        : [],
       settings: { ...defaultState.settings, ...(parsed.settings || {}) }
-    } : structuredClone(defaultState);
+    };
   } catch {
     return structuredClone(defaultState);
   }
@@ -114,6 +124,19 @@ function deleteTherapyImage(id) {
   return mediaRequest("readwrite", (store) => store.delete(id));
 }
 
+function clearTherapyImages() {
+  return mediaRequest("readwrite", (store) => store.clear());
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("Lettura immagine non riuscita"));
+    reader.readAsDataURL(blob);
+  });
+}
+
 function dataUrlToBlob(dataUrl) {
   const [header, encoded] = dataUrl.split(",");
   const mime = header.match(/data:([^;]+)/)?.[1] || "image/jpeg";
@@ -176,7 +199,7 @@ function timeToMinutes(value) {
 }
 
 function therapyApplies(therapy, date) {
-  if (!therapy.active) return false;
+  if (therapy.archived || !therapy.active) return false;
   const iso = localDateISO(date);
   if (therapy.startDate && iso < therapy.startDate) return false;
   if (therapy.endDate && iso > therapy.endDate) return false;
@@ -228,6 +251,7 @@ function showView(view) {
   $$(".nav-btn").forEach((el) => el.classList.toggle("active", el.dataset.view === view));
   window.scrollTo({ top: 0, behavior: "smooth" });
   if (view === "history") renderHistory();
+  if (view === "archive") renderArchive();
 }
 
 function imageHTML(src, cls = "med-thumb") {
@@ -238,6 +262,7 @@ function imageHTML(src, cls = "med-thumb") {
 function renderAll() {
   renderToday();
   renderTherapies();
+  renderArchive();
   renderHistory();
   renderSettings();
 }
@@ -283,21 +308,20 @@ function renderToday() {
   }).join("");
 }
 
-function renderTherapies() {
-  const list = $("#therapyList");
-  if (!state.therapies.length) {
-    list.innerHTML = `<div class="empty-state"><div class="empty-icon">💊</div><h3>Nessuna terapia</h3><p>Premi “Aggiungi” per creare il primo promemoria.</p></div>`;
-    return;
-  }
+function therapyCardHtml(therapy, { archived = false } = {}) {
   const dayNames = ["Dom", "Lun", "Mar", "Mer", "Gio", "Ven", "Sab"];
-  list.innerHTML = state.therapies.map((therapy) => `
-    <article class="therapy-card ${therapy.active ? "" : "inactive"}">
+  const archivedDate = therapy.archivedAt
+    ? new Intl.DateTimeFormat("it-IT", { dateStyle: "medium" }).format(new Date(therapy.archivedAt))
+    : "";
+
+  return `
+    <article class="therapy-card ${therapy.active && !archived ? "" : "inactive"}">
       <div class="therapy-card-top">
         <div>
           <h3>${escapeHTML(therapy.name)}</h3>
           <p class="muted">${escapeHTML(therapy.dose)}</p>
         </div>
-        <span class="status-pill">${therapy.active ? "Attiva" : "Sospesa"}</span>
+        <span class="status-pill">${archived ? "Archiviata" : therapy.active ? "Attiva" : "Sospesa"}</span>
       </div>
       <div class="therapy-card-media">
         ${therapyImageUrls.get(therapy.id) ? imageHTML(therapyImageUrls.get(therapy.id), "med-thumb-card") : ""}
@@ -306,15 +330,54 @@ function renderTherapies() {
           <p class="small-note">${therapy.days.length === 7 ? "Tutti i giorni" : therapy.days.map((d) => dayNames[d]).join(", ")}</p>
           ${therapy.barcode ? `<div><span class="chip code-chip">Codice a barre: ${escapeHTML(therapy.barcode)}</span></div>` : ""}
           ${therapy.notes ? `<p>${escapeHTML(therapy.notes)}</p>` : ""}
+          ${archivedDate ? `<p class="small-note">Archiviata il ${escapeHTML(archivedDate)}</p>` : ""}
         </div>
       </div>
       <div class="card-menu">
-        <button class="secondary small" data-action="edit-therapy" data-id="${therapy.id}" type="button">Modifica</button>
-        <button class="secondary small" data-action="toggle-therapy" data-id="${therapy.id}" type="button">${therapy.active ? "Sospendi" : "Riattiva"}</button>
-        <button class="text-btn danger-text small" data-action="delete-therapy" data-id="${therapy.id}" type="button">Elimina</button>
+        ${archived ? `
+          <button class="primary small" data-action="restore-therapy" data-id="${therapy.id}" type="button">Ripristina</button>
+          <button class="secondary small" data-action="edit-therapy" data-id="${therapy.id}" type="button">Consulta / modifica</button>
+          <button class="text-btn danger-text small" data-action="delete-forever" data-id="${therapy.id}" type="button">Elimina definitivamente</button>
+        ` : `
+          <button class="secondary small" data-action="edit-therapy" data-id="${therapy.id}" type="button">Modifica</button>
+          <button class="secondary small" data-action="toggle-therapy" data-id="${therapy.id}" type="button">${therapy.active ? "Sospendi" : "Riattiva"}</button>
+          <button class="secondary small" data-action="archive-therapy" data-id="${therapy.id}" type="button">Archivia</button>
+        `}
       </div>
-    </article>
-  `).join("");
+    </article>`;
+}
+
+function renderTherapies() {
+  const list = $("#therapyList");
+  const therapies = state.therapies.filter((therapy) => !therapy.archived);
+  if (!therapies.length) {
+    list.innerHTML = `<div class="empty-state"><div class="empty-icon">💊</div><h3>Nessuna terapia corrente</h3><p>Premi “Aggiungi” per creare una terapia oppure controlla l’Archivio.</p></div>`;
+    return;
+  }
+  list.innerHTML = therapies.map((therapy) => therapyCardHtml(therapy)).join("");
+}
+
+function renderArchive() {
+  const list = $("#archiveList");
+  if (!list) return;
+  const term = ($("#archiveSearch")?.value || "").trim().toLowerCase();
+  const archived = state.therapies
+    .filter((therapy) => therapy.archived)
+    .filter((therapy) => {
+      if (!term) return true;
+      return [therapy.name, therapy.dose, therapy.barcode, therapy.notes]
+        .some((value) => String(value || "").toLowerCase().includes(term));
+    })
+    .sort((a, b) => String(b.archivedAt || "").localeCompare(String(a.archivedAt || "")));
+
+  const total = state.therapies.filter((therapy) => therapy.archived).length;
+  if ($("#archiveCount")) $("#archiveCount").textContent = `${total} ${total === 1 ? "archiviata" : "archiviate"}`;
+
+  if (!archived.length) {
+    list.innerHTML = `<div class="empty-state"><div class="empty-icon">🗃️</div><h3>${term ? "Nessun risultato" : "Archivio vuoto"}</h3><p>${term ? "Prova con un altro termine di ricerca." : "Quando archivi una terapia, resterà conservata qui con tutti i suoi dati."}</p></div>`;
+    return;
+  }
+  list.innerHTML = archived.map((therapy) => therapyCardHtml(therapy, { archived: true })).join("");
 }
 
 function renderHistory() {
@@ -346,9 +409,23 @@ function renderSettings() {
   $("#appKey").value = s.appKey || "";
   $("#chatId").value = s.chatId || "";
   $("#timezone").value = s.timezone || "Europe/Rome";
+
   const permission = "Notification" in window ? Notification.permission : "unsupported";
-  const statusMap = { granted: "Attive", denied: "Bloccate", default: "Da autorizzare", unsupported: "Non supportate" };
+  const statusMap = {
+    granted: "Attive",
+    denied: "Bloccate",
+    default: "Da autorizzare",
+    unsupported: "Non supportate"
+  };
   $("#notificationStatus").textContent = statusMap[permission] || permission;
+
+  const backupStatus = $("#cloudBackupStatus");
+  if (backupStatus) {
+    backupStatus.className = "backup-status";
+    backupStatus.textContent = s.cloudBackupLast
+      ? `Ultimo backup online: ${new Date(s.cloudBackupLast).toLocaleString("it-IT")} · ${formatBytes(Number(s.cloudBackupBytes) || 0)}`
+      : "Nessun backup cloud registrato su questo dispositivo.";
+  }
 }
 
 function addTimeInput(value = "08:00") {
@@ -467,7 +544,9 @@ async function saveTherapy(event) {
     startDate: $("#startDate").value,
     endDate: $("#endDate").value,
     notes: $("#therapyNotes").value.trim(),
-    active: $("#therapyActive").checked,
+    active: existing?.archived ? false : $("#therapyActive").checked,
+    archived: existing?.archived === true,
+    archivedAt: existing?.archivedAt || "",
     updatedAt: new Date().toISOString()
   };
   if (!therapy.name || !therapy.dose) return showToast("Compila nome e dose.");
@@ -554,9 +633,11 @@ function cloudPayload() {
     chatId: state.settings.chatId.trim(),
     timezone: state.settings.timezone.trim() || "Europe/Rome",
     enabled: !!state.settings.telegramEnabled,
-    therapies: state.therapies.map(({ id, name, dose, barcode, days, times, startDate, endDate, notes, active }) => ({
-      id, name, dose, barcode, days, times, startDate, endDate, notes, active
-    }))
+    therapies: state.therapies
+      .filter((therapy) => !therapy.archived)
+      .map(({ id, name, dose, barcode, days, times, startDate, endDate, notes, active }) => ({
+        id, name, dose, barcode, days, times, startDate, endDate, notes, active
+      }))
   };
 }
 
@@ -603,7 +684,9 @@ function readSettingsForm() {
     apiBase: normalizeApiBase($("#apiBase").value),
     appKey: $("#appKey").value.trim(),
     chatId: $("#chatId").value.trim(),
-    timezone: $("#timezone").value.trim() || "Europe/Rome"
+    timezone: $("#timezone").value.trim() || "Europe/Rome",
+    cloudBackupLast: state.settings.cloudBackupLast || "",
+    cloudBackupBytes: Number(state.settings.cloudBackupBytes) || 0
   };
 }
 
@@ -616,27 +699,379 @@ function saveCloudSettings() {
   });
 }
 
-function exportBackup() {
-  const blob = new Blob([JSON.stringify({ app: "Terapie in Orario", version: 2, exportedAt: new Date().toISOString(), data: state }, null, 2)], { type: "application/json" });
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / (1024 ** index);
+  return `${value.toLocaleString("it-IT", { maximumFractionDigits: index ? 1 : 0 })} ${units[index]}`;
+}
+
+function setCloudBackupStatus(message, type = "") {
+  const element = $("#cloudBackupStatus");
+  if (!element) return;
+  element.textContent = message;
+  element.className = `backup-status${type ? ` ${type}` : ""}`;
+}
+
+function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `terapie-backup-${localDateISO()}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function buildCompleteBackup() {
+  const images = {};
+  for (const therapy of state.therapies) {
+    if (!therapy.hasImage) continue;
+    try {
+      const blob = await getTherapyImage(therapy.id);
+      if (blob) images[therapy.id] = await blobToDataUrl(blob);
+    } catch (error) {
+      console.error(`Immagine non inclusa nel backup per ${therapy.id}`, error);
+    }
+  }
+
+  return {
+    app: "Terapie in Orario",
+    version: 5,
+    exportedAt: new Date().toISOString(),
+    data: serializableState(),
+    images
+  };
+}
+
+async function restoreBackupPackage(packageData, { preserveConnection = false } = {}) {
+  const imported = packageData?.data || packageData;
+  if (!Array.isArray(imported?.therapies) || !Array.isArray(imported?.logs)) {
+    throw new Error("Formato di backup non valido");
+  }
+
+  const currentConnection = preserveConnection ? {
+    apiBase: normalizeApiBase($("#apiBase")?.value || state.settings.apiBase || ""),
+    appKey: $("#appKey")?.value?.trim() || state.settings.appKey || "",
+    chatId: $("#chatId")?.value?.trim() || state.settings.chatId || "",
+    timezone: $("#timezone")?.value?.trim() || state.settings.timezone || "Europe/Rome",
+    telegramEnabled: $("#telegramEnabled")?.checked ?? state.settings.telegramEnabled
+  } : {};
+
+  for (const url of therapyImageUrls.values()) URL.revokeObjectURL(url);
+  therapyImageUrls.clear();
+  await clearTherapyImages();
+
+  const restoredTherapies = imported.therapies.map((therapy) => ({
+    ...therapy,
+    archived: therapy.archived === true,
+    archivedAt: therapy.archivedAt || "",
+    hasImage: false
+  }));
+
+  const images = packageData?.images && typeof packageData.images === "object"
+    ? packageData.images
+    : {};
+
+  for (const therapy of restoredTherapies) {
+    const dataUrl = images[therapy.id];
+    if (!dataUrl) continue;
+    try {
+      const blob = dataUrlToBlob(dataUrl);
+      await putTherapyImage(therapy.id, blob);
+      replaceTherapyImageUrl(therapy.id, blob);
+      therapy.hasImage = true;
+    } catch (error) {
+      console.error(`Immagine non ripristinata per ${therapy.id}`, error);
+    }
+  }
+
+  state = {
+    ...structuredClone(defaultState),
+    ...imported,
+    therapies: restoredTherapies,
+    logs: imported.logs,
+    settings: {
+      ...defaultState.settings,
+      ...(imported.settings || {}),
+      ...currentConnection
+    }
+  };
+
+  if (!saveState({ sync: false })) throw new Error("Salvataggio locale non riuscito");
+  await loadTherapyImages();
+  renderAll();
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(value) {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+async function compressBytes(bytes) {
+  if (!("CompressionStream" in window)) return { bytes, compressed: false };
+  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("gzip"));
+  return { bytes: new Uint8Array(await new Response(stream).arrayBuffer()), compressed: true };
+}
+
+async function decompressBytes(bytes, compressed) {
+  if (!compressed) return bytes;
+  if (!("DecompressionStream" in window)) {
+    throw new Error("Questo browser non può decomprimere il backup. Aggiorna il browser.");
+  }
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function deriveBackupKey(password, salt, iterations) {
+  const material = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(password),
+    "PBKDF2",
+    false,
+    ["deriveKey"]
+  );
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt, iterations, hash: "SHA-256" },
+    material,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
+  );
+}
+
+async function encryptBackupPackage(packageData, password) {
+  if (!crypto?.subtle) throw new Error("Cifratura non supportata da questo browser");
+  const iterations = 250000;
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const encoded = new TextEncoder().encode(JSON.stringify(packageData));
+  const compressedResult = await compressBytes(encoded);
+  const key = await deriveBackupKey(password, salt, iterations);
+  const encrypted = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    compressedResult.bytes
+  );
+
+  return {
+    format: "terapie-encrypted-backup",
+    version: 1,
+    algorithm: "AES-GCM-256",
+    kdf: "PBKDF2-SHA-256",
+    iterations,
+    compressed: compressedResult.compressed,
+    salt: bytesToBase64(salt),
+    iv: bytesToBase64(iv),
+    ciphertext: bytesToBase64(new Uint8Array(encrypted))
+  };
+}
+
+async function decryptBackupEnvelope(envelope, password) {
+  if (!envelope || envelope.format !== "terapie-encrypted-backup") {
+    throw new Error("Backup cloud non riconosciuto");
+  }
+  try {
+    const salt = base64ToBytes(envelope.salt);
+    const iv = base64ToBytes(envelope.iv);
+    const ciphertext = base64ToBytes(envelope.ciphertext);
+    const key = await deriveBackupKey(password, salt, Number(envelope.iterations) || 250000);
+    const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ciphertext);
+    const decompressed = await decompressBytes(new Uint8Array(decrypted), envelope.compressed === true);
+    return JSON.parse(new TextDecoder().decode(decompressed));
+  } catch (error) {
+    console.error(error);
+    throw new Error("Password errata oppure backup danneggiato");
+  }
+}
+
+function readBackupConnection({ requirePassword = true } = {}) {
+  state.settings = readSettingsForm();
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState()));
+  const apiBase = normalizeApiBase(state.settings.apiBase);
+  const appKey = state.settings.appKey.trim();
+  const password = $("#cloudBackupPassword").value;
+  if (!apiBase) throw new Error("Inserisci l’indirizzo API Cloudflare");
+  if (appKey.length < 8) throw new Error("Inserisci o genera una chiave personale valida");
+  if (requirePassword && password.length < 8) throw new Error("La password del backup deve avere almeno 8 caratteri");
+  return { apiBase, appKey, password };
+}
+
+async function saveOnlineBackup() {
+  try {
+    const { apiBase, appKey, password } = readBackupConnection();
+    setCloudBackupStatus("Preparazione e cifratura del backup…", "working");
+    const packageData = await buildCompleteBackup();
+    const envelope = await encryptBackupPackage(packageData, password);
+    const response = await fetch(`${apiBase}/backup`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ appKey, envelope })
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `Errore ${response.status}`);
+    state.settings.cloudBackupLast = result.updatedAt || new Date().toISOString();
+    state.settings.cloudBackupBytes = Number(result.bytes) || 0;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState()));
+    setCloudBackupStatus(
+      `Backup online completato: ${new Date(state.settings.cloudBackupLast).toLocaleString("it-IT")} · ${formatBytes(state.settings.cloudBackupBytes)}`,
+      "success"
+    );
+    showToast("Backup esterno completato.");
+  } catch (error) {
+    setCloudBackupStatus(`Errore: ${error.message}`, "error");
+    showToast("Backup online non riuscito.");
+  }
+}
+
+async function restoreOnlineBackup() {
+  try {
+    const { apiBase, appKey, password } = readBackupConnection();
+    if (!confirm("Il ripristino sostituirà terapie, archivio, storico e fotografie presenti su questo dispositivo. Continuare?")) return;
+    setCloudBackupStatus("Download e decifratura del backup…", "working");
+    const response = await fetch(`${apiBase}/backup?appKey=${encodeURIComponent(appKey)}`);
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `Errore ${response.status}`);
+    const packageData = await decryptBackupEnvelope(result.envelope, password);
+    await restoreBackupPackage(packageData, { preserveConnection: true });
+    state.settings.cloudBackupLast = result.updatedAt || packageData.exportedAt || new Date().toISOString();
+    state.settings.cloudBackupBytes = Number(result.bytes) || 0;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState()));
+    setCloudBackupStatus(
+      `Backup ripristinato: ${new Date(state.settings.cloudBackupLast).toLocaleString("it-IT")} · ${formatBytes(state.settings.cloudBackupBytes)}`,
+      "success"
+    );
+    showToast("Backup cloud ripristinato.");
+  } catch (error) {
+    setCloudBackupStatus(`Errore: ${error.message}`, "error");
+    showToast("Ripristino non riuscito.");
+  }
+}
+
+async function deleteOnlineBackup() {
+  try {
+    const { apiBase, appKey } = readBackupConnection({ requirePassword: false });
+    if (!confirm("Eliminare definitivamente il backup esterno conservato su Cloudflare?")) return;
+    setCloudBackupStatus("Eliminazione del backup online…", "working");
+    const response = await fetch(`${apiBase}/backup?appKey=${encodeURIComponent(appKey)}`, { method: "DELETE" });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || `Errore ${response.status}`);
+    state.settings.cloudBackupLast = "";
+    state.settings.cloudBackupBytes = 0;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState()));
+    setCloudBackupStatus("Backup cloud eliminato.", "success");
+    showToast("Backup esterno eliminato.");
+  } catch (error) {
+    setCloudBackupStatus(`Errore: ${error.message}`, "error");
+    showToast("Eliminazione non riuscita.");
+  }
+}
+
+async function exportBackup() {
+  try {
+    const packageData = await buildCompleteBackup();
+    const blob = new Blob([JSON.stringify(packageData, null, 2)], { type: "application/json" });
+    downloadBlob(blob, `terapie-backup-completo-${localDateISO()}.json`);
+    showToast("Backup JSON completo esportato.");
+  } catch (error) {
+    console.error(error);
+    showToast("Esportazione JSON non riuscita.");
+  }
 }
 
 async function importBackup(file) {
   try {
     const parsed = JSON.parse(await file.text());
-    const imported = parsed.data || parsed;
-    if (!Array.isArray(imported.therapies) || !Array.isArray(imported.logs)) throw new Error("Formato non valido");
-    state = { ...structuredClone(defaultState), ...imported, settings: { ...defaultState.settings, ...(imported.settings || {}) } };
-    saveState();
-    showToast("Backup ripristinato.");
-  } catch {
+    if (!confirm("Importare questo backup e sostituire i dati presenti sul dispositivo?")) return;
+    await restoreBackupPackage(parsed, { preserveConnection: true });
+    showToast("Backup JSON ripristinato.");
+  } catch (error) {
+    console.error(error);
     showToast("Il file selezionato non è un backup valido.");
   }
+}
+
+function csvCell(value) {
+  const normalized = String(value ?? "").replace(/\r?\n/g, " ");
+  return `"${normalized.replace(/"/g, '""')}"`;
+}
+
+function exportCsv() {
+  const dayNames = ["Dom", "Lun", "Mar", "Mer", "Gio", "Ven", "Sab"];
+  const rows = [[
+    "Tipo record", "ID terapia", "Nome", "Dose", "Codice a barre", "Stato terapia",
+    "Archiviata", "Giorni", "Orari", "Data inizio", "Data fine", "Note",
+    "Data evento", "Ora evento", "Esito"
+  ]];
+
+  for (const therapy of state.therapies) {
+    rows.push([
+      "TERAPIA", therapy.id, therapy.name, therapy.dose, therapy.barcode || "",
+      therapy.active ? "Attiva" : "Sospesa", therapy.archived ? "Sì" : "No",
+      (therapy.days || []).map((day) => dayNames[day]).join(", "),
+      (therapy.times || []).join(", "), therapy.startDate || "", therapy.endDate || "",
+      therapy.notes || "", "", "", ""
+    ]);
+  }
+
+  for (const log of state.logs) {
+    const therapy = state.therapies.find((item) => item.id === log.therapyId);
+    rows.push([
+      "ASSUNZIONE", log.therapyId, therapy?.name || log.therapyName || "", therapy?.dose || "",
+      therapy?.barcode || "", "", therapy?.archived ? "Sì" : "No", "", "", "", "", "",
+      log.date || "", log.time || "", log.status === "taken" ? "Presa" : "Saltata"
+    ]);
+  }
+
+  const content = "\ufeff" + rows.map((row) => row.map(csvCell).join(";")).join("\r\n");
+  downloadBlob(new Blob([content], { type: "text/csv;charset=utf-8" }), `terapie-e-storico-${localDateISO()}.csv`);
+  showToast("Archivio CSV esportato.");
+}
+
+function printPdfReport() {
+  const popup = window.open("", "_blank");
+  if (!popup) return showToast("Consenti l’apertura delle finestre per creare il PDF.");
+  const dayNames = ["Dom", "Lun", "Mar", "Mer", "Gio", "Ven", "Sab"];
+  const therapiesHtml = state.therapies.map((therapy) => `
+    <section class="therapy">
+      <h2>${escapeHTML(therapy.name)}</h2>
+      <p><strong>Dose:</strong> ${escapeHTML(therapy.dose)}</p>
+      <p><strong>Stato:</strong> ${therapy.archived ? "Archiviata" : therapy.active ? "Attiva" : "Sospesa"}</p>
+      <p><strong>Giorni:</strong> ${(therapy.days || []).map((day) => dayNames[day]).join(", ")}</p>
+      <p><strong>Orari:</strong> ${(therapy.times || []).map(escapeHTML).join(", ")}</p>
+      ${therapy.barcode ? `<p><strong>Codice:</strong> ${escapeHTML(therapy.barcode)}</p>` : ""}
+      ${therapy.notes ? `<p><strong>Note:</strong> ${escapeHTML(therapy.notes)}</p>` : ""}
+    </section>
+  `).join("");
+  const logsHtml = [...state.logs].sort((a, b) => b.timestamp.localeCompare(a.timestamp)).map((log) => `
+    <tr><td>${escapeHTML(log.date)}</td><td>${escapeHTML(log.time)}</td><td>${escapeHTML(log.therapyName || "")}</td><td>${log.status === "taken" ? "Presa" : "Saltata"}</td></tr>
+  `).join("");
+
+  popup.document.write(`<!doctype html><html lang="it"><head><meta charset="utf-8"><title>Report terapie</title>
+    <style>
+      body{font-family:Arial,sans-serif;color:#17332e;margin:28px;line-height:1.4}h1{margin-bottom:4px}h2{font-size:18px;margin:0 0 8px}.muted{color:#657b76}.therapy{border:1px solid #ccdcd7;border-radius:12px;padding:14px;margin:12px 0;break-inside:avoid}.therapy p{margin:4px 0}table{width:100%;border-collapse:collapse;margin-top:16px;font-size:12px}th,td{border:1px solid #ccdcd7;padding:7px;text-align:left}th{background:#eef4f2}@media print{button{display:none}body{margin:12mm}}
+    </style></head><body>
+    <button onclick="window.print()">Stampa / Salva PDF</button>
+    <h1>Terapie in Orario</h1><p class="muted">Report generato il ${new Date().toLocaleString("it-IT")}</p>
+    <h2>Terapie</h2>${therapiesHtml || "<p>Nessuna terapia.</p>"}
+    <h2>Storico assunzioni</h2><table><thead><tr><th>Data</th><th>Ora</th><th>Terapia</th><th>Esito</th></tr></thead><tbody>${logsHtml || '<tr><td colspan="4">Nessuna registrazione.</td></tr>'}</tbody></table>
+    </body></html>`);
+  popup.document.close();
+  popup.focus();
+  setTimeout(() => popup.print(), 500);
 }
 
 async function initBarcodeDetector() {
@@ -725,6 +1160,11 @@ function bindEvents() {
   $("#closeScannerBtn").addEventListener("click", closeScanner);
   $("#manualCloseScannerBtn").addEventListener("click", closeScanner);
   $("#scannerDialog").addEventListener("close", closeScanner);
+  $("#archiveSearch").addEventListener("input", renderArchive);
+  $("#clearArchiveSearch").addEventListener("click", () => {
+    $("#archiveSearch").value = "";
+    renderArchive();
+  });
 
   document.addEventListener("click", (event) => {
     const button = event.target.closest("[data-action]");
@@ -739,13 +1179,36 @@ function bindEvents() {
       if (therapy) therapy.active = !therapy.active;
       saveState();
     }
-    if (action === "delete-therapy") {
+    if (action === "archive-therapy") {
       const therapy = state.therapies.find((item) => item.id === id);
-      if (therapy && confirm(`Eliminare la terapia “${therapy.name}”? Lo storico già registrato resterà disponibile.`)) {
+      if (therapy && confirm(`Archiviare la terapia “${therapy.name}”? Non riceverai più promemoria, ma tutti i dati resteranno conservati.`)) {
+        therapy.archived = true;
+        therapy.archivedAt = new Date().toISOString();
+        therapy.active = false;
+        saveState();
+        showToast("Terapia spostata nell’archivio.");
+      }
+    }
+    if (action === "restore-therapy") {
+      const therapy = state.therapies.find((item) => item.id === id);
+      if (therapy) {
+        therapy.archived = false;
+        therapy.archivedAt = "";
+        therapy.active = false;
+        therapy.updatedAt = new Date().toISOString();
+        saveState();
+        showToast("Terapia ripristinata come sospesa. Riattivala solo se ancora prescritta.");
+        showView("therapies");
+      }
+    }
+    if (action === "delete-forever") {
+      const therapy = state.therapies.find((item) => item.id === id);
+      if (therapy && confirm(`Eliminare definitivamente “${therapy.name}”? Questa operazione non può essere annullata. Lo storico delle assunzioni resterà comunque disponibile.`)) {
         state.therapies = state.therapies.filter((item) => item.id !== id);
         deleteTherapyImage(id).catch(console.error);
         replaceTherapyImageUrl(id, null);
         saveState();
+        showToast("Terapia eliminata definitivamente.");
       }
     }
   });
@@ -757,7 +1220,12 @@ function bindEvents() {
   $("#generateKeyBtn").addEventListener("click", () => { $("#appKey").value = [...crypto.getRandomValues(new Uint8Array(16))].map((n) => n.toString(16).padStart(2, "0")).join(""); });
   $("#saveCloudBtn").addEventListener("click", saveCloudSettings);
   $("#testTelegramBtn").addEventListener("click", testTelegram);
-  $("#exportBtn").addEventListener("click", exportBackup);
+  $("#saveOnlineBackupBtn").addEventListener("click", saveOnlineBackup);
+  $("#restoreOnlineBackupBtn").addEventListener("click", restoreOnlineBackup);
+  $("#deleteOnlineBackupBtn").addEventListener("click", deleteOnlineBackup);
+  $("#exportJsonBtn").addEventListener("click", exportBackup);
+  $("#exportCsvBtn").addEventListener("click", exportCsv);
+  $("#printPdfBtn").addEventListener("click", printPdfReport);
   $("#importInput").addEventListener("change", (event) => {
     const file = event.target.files?.[0];
     if (file) importBackup(file);

@@ -57,6 +57,23 @@
       <div id="therapyList" class="card-list"></div>
     </section>
 
+
+    <section id="view-archive" class="view" aria-labelledby="archiveTitle">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Memoria terapie</p>
+          <h2 id="archiveTitle">Archivio terapie</h2>
+        </div>
+        <span id="archiveCount" class="status-pill">0 archiviate</span>
+      </div>
+      <p class="muted">Qui restano conservate le terapie terminate o non più utilizzate, comprese foto, codice a barre, note e storico.</p>
+      <div class="archive-toolbar">
+        <input id="archiveSearch" type="search" placeholder="Cerca per nome, dose, codice o nota" aria-label="Cerca nell'archivio terapie">
+        <button id="clearArchiveSearch" class="secondary" type="button">Azzera</button>
+      </div>
+      <div id="archiveList" class="card-list"></div>
+    </section>
+
     <section id="view-history" class="view" aria-labelledby="historyTitle">
       <div class="section-heading">
         <div>
@@ -119,13 +136,37 @@
         <p id="cloudStatus" class="small-note"></p>
       </article>
 
+      <article class="settings-card cloud-backup-card">
+        <div class="settings-title-row">
+          <div>
+            <h3>Backup esterno protetto</h3>
+            <p>Salva su Cloudflare tutte le terapie, l’archivio, lo storico e le fotografie. Il contenuto viene cifrato sul dispositivo prima dell’invio.</p>
+          </div>
+          <span class="cloud-icon" aria-hidden="true">☁️</span>
+        </div>
+
+        <label>Password del backup
+          <input id="cloudBackupPassword" type="password" minlength="8" autocomplete="new-password" placeholder="Almeno 8 caratteri">
+        </label>
+        <p class="small-note">La password non viene salvata né inviata in chiaro. Se la perdi, il backup non potrà essere recuperato.</p>
+
+        <div class="row-actions backup-actions">
+          <button id="saveOnlineBackupBtn" class="primary" type="button">Salva backup online</button>
+          <button id="restoreOnlineBackupBtn" class="secondary" type="button">Ripristina dal cloud</button>
+          <button id="deleteOnlineBackupBtn" class="text-btn danger-text" type="button">Elimina backup cloud</button>
+        </div>
+        <p id="cloudBackupStatus" class="backup-status">Nessun backup cloud registrato su questo dispositivo.</p>
+      </article>
+
       <article class="settings-card">
-        <h3>Backup</h3>
-        <p>Salva una copia delle terapie e dello storico oppure ripristina un backup precedente.</p>
-        <div class="row-actions">
-          <button id="exportBtn" class="secondary" type="button">Esporta JSON</button>
+        <h3>Esportazioni locali</h3>
+        <p>Puoi conservare anche copie leggibili sul computer o sul telefono. CSV e PDF sono utili per consultazione; JSON è adatto al ripristino completo.</p>
+        <div class="row-actions backup-actions">
+          <button id="exportJsonBtn" class="secondary" type="button">Esporta JSON completo</button>
+          <button id="exportCsvBtn" class="secondary" type="button">Esporta CSV</button>
+          <button id="printPdfBtn" class="secondary" type="button">Stampa / Salva PDF</button>
           <label class="secondary file-label">Importa JSON
-            <input id="importInput" type="file" accept="application/json">
+            <input id="importInput" type="file" accept="application/json,.json">
           </label>
         </div>
       </article>
@@ -140,6 +181,7 @@
   <nav class="bottom-nav" aria-label="Navigazione principale">
     <button class="nav-btn active" data-view="today" type="button"><span>◷</span>Oggi</button>
     <button class="nav-btn" data-view="therapies" type="button"><span>💊</span>Terapie</button>
+    <button class="nav-btn" data-view="archive" type="button"><span>🗃️</span>Archivio</button>
     <button class="nav-btn" data-view="history" type="button"><span>✓</span>Storico</button>
     <button class="nav-btn" data-view="settings" type="button"><span>⚙</span>Impostazioni</button>
   </nav>
