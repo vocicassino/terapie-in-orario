@@ -139,22 +139,39 @@
       <article class="settings-card cloud-backup-card">
         <div class="settings-title-row">
           <div>
-            <h3>Backup esterno protetto</h3>
-            <p>Salva su Cloudflare tutte le terapie, l’archivio, lo storico e le fotografie. Il contenuto viene cifrato sul dispositivo prima dell’invio.</p>
+            <h3>Backup e ripristino facile</h3>
+            <p>Salva su Cloudflare terapie, archivio, storico e fotografie. Per cambiare telefono ti servirà un solo codice.</p>
           </div>
           <span class="cloud-icon" aria-hidden="true">☁️</span>
         </div>
 
-        <label>Password del backup
-          <input id="cloudBackupPassword" type="password" minlength="8" autocomplete="new-password" placeholder="Almeno 8 caratteri">
-        </label>
-        <p class="small-note">La password non viene salvata né inviata in chiaro. Se la perdi, il backup non potrà essere recuperato.</p>
+        <div class="easy-backup-panel">
+          <button id="easyBackupBtn" class="primary wide-button" type="button">Salva backup e crea il codice</button>
 
-        <div class="row-actions backup-actions">
-          <button id="saveOnlineBackupBtn" class="primary" type="button">Salva backup online</button>
-          <button id="restoreOnlineBackupBtn" class="secondary" type="button">Ripristina dal cloud</button>
-          <button id="deleteOnlineBackupBtn" class="text-btn danger-text" type="button">Elimina backup cloud</button>
+          <label>Codice unico di ripristino
+            <textarea id="recoveryCodeInput" rows="4" spellcheck="false" autocomplete="off" placeholder="Il codice comparirà qui dopo il backup. Sul nuovo telefono puoi incollarlo qui."></textarea>
+          </label>
+          <p class="small-note recovery-warning"><strong>Conservalo come una password:</strong> chi possiede questo codice può recuperare il backup.</p>
+
+          <div class="row-actions backup-actions">
+            <button id="copyRecoveryCodeBtn" class="secondary" type="button">Copia codice</button>
+            <button id="shareRecoveryCodeBtn" class="secondary" type="button">Condividi collegamento</button>
+            <button id="restoreWithCodeBtn" class="primary" type="button">Ripristina con il codice</button>
+          </div>
         </div>
+
+        <details class="advanced-backup-options">
+          <summary>Opzioni avanzate</summary>
+          <p class="small-note">Servono soltanto per usare un vecchio backup creato con chiave personale e password separate.</p>
+          <label>Password del vecchio backup
+            <input id="cloudBackupPassword" type="password" minlength="8" autocomplete="new-password" placeholder="Almeno 8 caratteri">
+          </label>
+          <div class="row-actions backup-actions">
+            <button id="saveOnlineBackupBtn" class="secondary" type="button">Salva con password</button>
+            <button id="restoreOnlineBackupBtn" class="secondary" type="button">Ripristina vecchio backup</button>
+            <button id="deleteOnlineBackupBtn" class="text-btn danger-text" type="button">Elimina backup cloud</button>
+          </div>
+        </details>
         <p id="cloudBackupStatus" class="backup-status">Nessun backup cloud registrato su questo dispositivo.</p>
       </article>
 

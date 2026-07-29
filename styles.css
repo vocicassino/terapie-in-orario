@@ -226,3 +226,33 @@ legend { font-weight: 850; padding: 0 6px; }
   .backup-actions > button,
   .backup-actions > .file-label { width: 100%; justify-content: center; text-align: center; }
 }
+
+
+/* Backup semplificato con codice unico */
+.easy-backup-panel {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: #f7fbfa;
+}
+.wide-button { width: 100%; }
+#recoveryCodeInput {
+  min-height: 100px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: .78rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.recovery-warning { padding: 10px 12px; border-radius: 12px; background: #fff5d8; color: #705600; }
+.advanced-backup-options {
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.advanced-backup-options summary {
+  cursor: pointer;
+  color: var(--primary);
+  font-weight: 800;
+}

@@ -17,7 +17,8 @@ const defaultState = {
     chatId: "",
     timezone: "Europe/Rome",
     cloudBackupLast: "",
-    cloudBackupBytes: 0
+    cloudBackupBytes: 0,
+    recoveryCode: ""
   }
 };
 
@@ -419,6 +420,11 @@ function renderSettings() {
   };
   $("#notificationStatus").textContent = statusMap[permission] || permission;
 
+  const recoveryInput = $("#recoveryCodeInput");
+  if (recoveryInput && document.activeElement !== recoveryInput) {
+    recoveryInput.value = s.recoveryCode || "";
+  }
+
   const backupStatus = $("#cloudBackupStatus");
   if (backupStatus) {
     backupStatus.className = "backup-status";
@@ -686,7 +692,8 @@ function readSettingsForm() {
     chatId: $("#chatId").value.trim(),
     timezone: $("#timezone").value.trim() || "Europe/Rome",
     cloudBackupLast: state.settings.cloudBackupLast || "",
-    cloudBackupBytes: Number(state.settings.cloudBackupBytes) || 0
+    cloudBackupBytes: Number(state.settings.cloudBackupBytes) || 0,
+    recoveryCode: state.settings.recoveryCode || ""
   };
 }
 
@@ -803,6 +810,7 @@ async function restoreBackupPackage(packageData, { preserveConnection = false } 
   if (!saveState({ sync: false })) throw new Error("Salvataggio locale non riuscito");
   await loadTherapyImages();
   renderAll();
+  loadRecoveryCodeFromUrl();
 }
 
 function bytesToBase64(bytes) {
@@ -898,6 +906,236 @@ async function decryptBackupEnvelope(envelope, password) {
   }
 }
 
+
+function bytesToBase64Url(bytes) {
+  return bytesToBase64(bytes)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function base64UrlToBytes(value) {
+  const normalized = String(value || "")
+    .replace(/-/g, "+")
+    .replace(/_/g, "/");
+  const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4);
+  return base64ToBytes(padded);
+}
+
+function randomHex(bytes = 16) {
+  return [...crypto.getRandomValues(new Uint8Array(bytes))]
+    .map((value) => value.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function randomRecoverySecret() {
+  return bytesToBase64Url(crypto.getRandomValues(new Uint8Array(32)));
+}
+
+function createRecoveryCode({ apiBase, appKey, password }) {
+  const payload = {
+    v: 1,
+    api: normalizeApiBase(apiBase),
+    key: String(appKey || "").trim(),
+    secret: String(password || "")
+  };
+  const encoded = new TextEncoder().encode(JSON.stringify(payload));
+  return `TIO1.${bytesToBase64Url(encoded)}`;
+}
+
+function decodeRecoveryCode(code) {
+  const clean = String(code || "").trim().replace(/\s+/g, "");
+  if (!clean.startsWith("TIO1.")) {
+    throw new Error("Codice di ripristino non riconosciuto");
+  }
+  try {
+    const payload = JSON.parse(new TextDecoder().decode(base64UrlToBytes(clean.slice(5))));
+    const apiBase = normalizeApiBase(payload?.api || "");
+    const appKey = String(payload?.key || "").trim();
+    const password = String(payload?.secret || "");
+    if (payload?.v !== 1 || !apiBase || appKey.length < 8 || password.length < 8) {
+      throw new Error("Dati incompleti");
+    }
+    return { apiBase, appKey, password, code: clean };
+  } catch (error) {
+    console.error(error);
+    throw new Error("Codice di ripristino non valido o danneggiato");
+  }
+}
+
+function setRecoveryCode(code) {
+  const clean = String(code || "").trim();
+  state.settings.recoveryCode = clean;
+  const input = $("#recoveryCodeInput");
+  if (input) input.value = clean;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState()));
+}
+
+function getEasyBackupCredentials() {
+  state.settings = readSettingsForm();
+  const apiBase = normalizeApiBase(state.settings.apiBase);
+  if (!apiBase) throw new Error("Inserisci prima l’indirizzo API Cloudflare nelle impostazioni");
+
+  let appKey = state.settings.appKey.trim();
+  let password = "";
+  const currentCode = $("#recoveryCodeInput")?.value.trim() || state.settings.recoveryCode || "";
+
+  if (currentCode) {
+    try {
+      const decoded = decodeRecoveryCode(currentCode);
+      appKey = decoded.appKey;
+      password = decoded.password;
+    } catch {
+      // Se il campo contiene un testo non valido, viene creato un nuovo codice.
+    }
+  }
+
+  if (appKey.length < 8) appKey = randomHex(16);
+  if (password.length < 8) password = randomRecoverySecret();
+
+  const code = createRecoveryCode({ apiBase, appKey, password });
+  state.settings.apiBase = apiBase;
+  state.settings.appKey = appKey;
+  state.settings.recoveryCode = code;
+  $("#apiBase").value = apiBase;
+  $("#appKey").value = appKey;
+  $("#cloudBackupPassword").value = password;
+  setRecoveryCode(code);
+  return { apiBase, appKey, password, code };
+}
+
+async function performOnlineBackup({ apiBase, appKey, password }) {
+  setCloudBackupStatus("Preparazione e cifratura del backup…", "working");
+  const packageData = await buildCompleteBackup();
+  const envelope = await encryptBackupPackage(packageData, password);
+  const response = await fetch(`${apiBase}/backup`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ appKey, envelope })
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || `Errore ${response.status}`);
+  state.settings.cloudBackupLast = result.updatedAt || new Date().toISOString();
+  state.settings.cloudBackupBytes = Number(result.bytes) || 0;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState()));
+  setCloudBackupStatus(
+    `Backup online completato: ${new Date(state.settings.cloudBackupLast).toLocaleString("it-IT")} · ${formatBytes(state.settings.cloudBackupBytes)}`,
+    "success"
+  );
+  return result;
+}
+
+async function performOnlineRestore({ apiBase, appKey, password }) {
+  setCloudBackupStatus("Download e decifratura del backup…", "working");
+  const response = await fetch(`${apiBase}/backup?appKey=${encodeURIComponent(appKey)}`);
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || `Errore ${response.status}`);
+  const packageData = await decryptBackupEnvelope(result.envelope, password);
+  await restoreBackupPackage(packageData, { preserveConnection: true });
+  state.settings.cloudBackupLast = result.updatedAt || packageData.exportedAt || new Date().toISOString();
+  state.settings.cloudBackupBytes = Number(result.bytes) || 0;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState()));
+  setCloudBackupStatus(
+    `Backup ripristinato: ${new Date(state.settings.cloudBackupLast).toLocaleString("it-IT")} · ${formatBytes(state.settings.cloudBackupBytes)}`,
+    "success"
+  );
+  return result;
+}
+
+async function easyBackup() {
+  try {
+    const credentials = getEasyBackupCredentials();
+    await performOnlineBackup(credentials);
+    setRecoveryCode(credentials.code);
+    showToast("Backup completato. Conserva il codice di ripristino.");
+  } catch (error) {
+    setCloudBackupStatus(`Errore: ${error.message}`, "error");
+    showToast("Backup online non riuscito.");
+  }
+}
+
+async function restoreWithRecoveryCode() {
+  try {
+    const credentials = decodeRecoveryCode($("#recoveryCodeInput")?.value || "");
+    if (!confirm("Il ripristino sostituirà terapie, archivio, storico e fotografie presenti su questo dispositivo. Continuare?")) return;
+
+    state.settings.apiBase = credentials.apiBase;
+    state.settings.appKey = credentials.appKey;
+    state.settings.recoveryCode = credentials.code;
+    $("#apiBase").value = credentials.apiBase;
+    $("#appKey").value = credentials.appKey;
+    $("#cloudBackupPassword").value = credentials.password;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState()));
+
+    await performOnlineRestore(credentials);
+    setRecoveryCode(credentials.code);
+    showToast("Backup ripristinato con il codice unico.");
+  } catch (error) {
+    setCloudBackupStatus(`Errore: ${error.message}`, "error");
+    showToast("Ripristino non riuscito.");
+  }
+}
+
+async function copyRecoveryCode() {
+  const code = $("#recoveryCodeInput")?.value.trim() || state.settings.recoveryCode || "";
+  if (!code) return showToast("Prima crea un backup e il relativo codice.");
+  try {
+    await navigator.clipboard.writeText(code);
+    showToast("Codice copiato.");
+  } catch {
+    const input = $("#recoveryCodeInput");
+    input.focus();
+    input.select();
+    document.execCommand("copy");
+    showToast("Codice copiato.");
+  }
+}
+
+function buildRecoveryLink(code) {
+  const url = new URL(location.href);
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set("restore", code);
+  return url.toString();
+}
+
+async function shareRecoveryCode() {
+  const code = $("#recoveryCodeInput")?.value.trim() || state.settings.recoveryCode || "";
+  if (!code) return showToast("Prima crea un backup e il relativo codice.");
+  const url = buildRecoveryLink(code);
+  try {
+    if (navigator.share) {
+      await navigator.share({
+        title: "Ripristino Terapie in Orario",
+        text: "Apri questo collegamento sul nuovo telefono per recuperare il backup. Conservalo in modo riservato.",
+        url
+      });
+    } else {
+      await navigator.clipboard.writeText(url);
+      showToast("Collegamento di ripristino copiato.");
+    }
+  } catch (error) {
+    if (error?.name !== "AbortError") showToast("Condivisione non riuscita.");
+  }
+}
+
+function loadRecoveryCodeFromUrl() {
+  const url = new URL(location.href);
+  const code = url.searchParams.get("restore");
+  if (!code) return;
+  try {
+    decodeRecoveryCode(code);
+    setRecoveryCode(code);
+    showView("settings");
+    setCloudBackupStatus("Codice ricevuto. Premi “Ripristina con il codice”.", "working");
+  } catch (error) {
+    setCloudBackupStatus(`Errore: ${error.message}`, "error");
+  } finally {
+    url.searchParams.delete("restore");
+    history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  }
+}
+
 function readBackupConnection({ requirePassword = true } = {}) {
   state.settings = readSettingsForm();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState()));
@@ -912,24 +1150,10 @@ function readBackupConnection({ requirePassword = true } = {}) {
 
 async function saveOnlineBackup() {
   try {
-    const { apiBase, appKey, password } = readBackupConnection();
-    setCloudBackupStatus("Preparazione e cifratura del backup…", "working");
-    const packageData = await buildCompleteBackup();
-    const envelope = await encryptBackupPackage(packageData, password);
-    const response = await fetch(`${apiBase}/backup`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ appKey, envelope })
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.error || `Errore ${response.status}`);
-    state.settings.cloudBackupLast = result.updatedAt || new Date().toISOString();
-    state.settings.cloudBackupBytes = Number(result.bytes) || 0;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState()));
-    setCloudBackupStatus(
-      `Backup online completato: ${new Date(state.settings.cloudBackupLast).toLocaleString("it-IT")} · ${formatBytes(state.settings.cloudBackupBytes)}`,
-      "success"
-    );
+    const credentials = readBackupConnection();
+    await performOnlineBackup(credentials);
+    const code = createRecoveryCode(credentials);
+    setRecoveryCode(code);
     showToast("Backup esterno completato.");
   } catch (error) {
     setCloudBackupStatus(`Errore: ${error.message}`, "error");
@@ -939,21 +1163,11 @@ async function saveOnlineBackup() {
 
 async function restoreOnlineBackup() {
   try {
-    const { apiBase, appKey, password } = readBackupConnection();
+    const credentials = readBackupConnection();
     if (!confirm("Il ripristino sostituirà terapie, archivio, storico e fotografie presenti su questo dispositivo. Continuare?")) return;
-    setCloudBackupStatus("Download e decifratura del backup…", "working");
-    const response = await fetch(`${apiBase}/backup?appKey=${encodeURIComponent(appKey)}`);
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.error || `Errore ${response.status}`);
-    const packageData = await decryptBackupEnvelope(result.envelope, password);
-    await restoreBackupPackage(packageData, { preserveConnection: true });
-    state.settings.cloudBackupLast = result.updatedAt || packageData.exportedAt || new Date().toISOString();
-    state.settings.cloudBackupBytes = Number(result.bytes) || 0;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState()));
-    setCloudBackupStatus(
-      `Backup ripristinato: ${new Date(state.settings.cloudBackupLast).toLocaleString("it-IT")} · ${formatBytes(state.settings.cloudBackupBytes)}`,
-      "success"
-    );
+    await performOnlineRestore(credentials);
+    const code = createRecoveryCode(credentials);
+    setRecoveryCode(code);
     showToast("Backup cloud ripristinato.");
   } catch (error) {
     setCloudBackupStatus(`Errore: ${error.message}`, "error");
@@ -1220,6 +1434,14 @@ function bindEvents() {
   $("#generateKeyBtn").addEventListener("click", () => { $("#appKey").value = [...crypto.getRandomValues(new Uint8Array(16))].map((n) => n.toString(16).padStart(2, "0")).join(""); });
   $("#saveCloudBtn").addEventListener("click", saveCloudSettings);
   $("#testTelegramBtn").addEventListener("click", testTelegram);
+  $("#easyBackupBtn").addEventListener("click", easyBackup);
+  $("#copyRecoveryCodeBtn").addEventListener("click", copyRecoveryCode);
+  $("#shareRecoveryCodeBtn").addEventListener("click", shareRecoveryCode);
+  $("#restoreWithCodeBtn").addEventListener("click", restoreWithRecoveryCode);
+  $("#recoveryCodeInput").addEventListener("change", (event) => {
+    state.settings.recoveryCode = event.target.value.trim();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState()));
+  });
   $("#saveOnlineBackupBtn").addEventListener("click", saveOnlineBackup);
   $("#restoreOnlineBackupBtn").addEventListener("click", restoreOnlineBackup);
   $("#deleteOnlineBackupBtn").addEventListener("click", deleteOnlineBackup);
@@ -1250,6 +1472,7 @@ async function init() {
   bindEvents();
   await loadTherapyImages();
   renderAll();
+  loadRecoveryCodeFromUrl();
   if ("serviceWorker" in navigator) {
     try { await navigator.serviceWorker.register("sw.js"); } catch (error) { console.error(error); }
   }
