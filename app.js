@@ -71,14 +71,47 @@ function serializableState() {
   };
 }
 
-function saveState({ sync = true } = {}) {
+function removeLegacyStorageKeys() {
+  for (const key of LEGACY_STORAGE_KEYS) {
+    try {
+      localStorage.removeItem(key);
+    } catch (error) {
+      console.warn(`Impossibile rimuovere la vecchia memoria ${key}`, error);
+    }
+  }
+}
+
+function writeStateToLocalStorage() {
+  const serialized = JSON.stringify(serializableState());
+
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState()));
-  } catch (error) {
-    console.error("Errore salvataggio dati", error);
-    showToast("Memoria del browser piena. Le immagini ora vengono salvate separatamente: riprova.");
+    localStorage.setItem(STORAGE_KEY, serialized);
+    // Le versioni precedenti potevano contenere fotografie Base64 molto grandi.
+    // Dopo un salvataggio valido vengono eliminate per liberare spazio.
+    removeLegacyStorageKeys();
+    return true;
+  } catch (firstError) {
+    console.warn("Primo tentativo di salvataggio non riuscito: pulizia vecchi dati", firstError);
+
+    // Recupero automatico: libera le vecchie chiavi e riprova una sola volta.
+    removeLegacyStorageKeys();
+
+    try {
+      localStorage.setItem(STORAGE_KEY, serialized);
+      return true;
+    } catch (secondError) {
+      console.error("Errore salvataggio dati", secondError);
+      return false;
+    }
+  }
+}
+
+function saveState({ sync = true } = {}) {
+  if (!writeStateToLocalStorage()) {
+    showToast("Spazio del browser esaurito. Esporta un backup e libera i dati del sito.");
     return false;
   }
+
   renderAll();
   if (sync && state.settings.telegramEnabled) {
     syncCloud(false).catch(console.error);
@@ -668,7 +701,7 @@ async function syncCloud(showMessage = true) {
 async function testTelegram() {
   try {
     state.settings = readSettingsForm();
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState()));
+    writeStateToLocalStorage();
     const apiBase = normalizeApiBase(state.settings.apiBase);
     const payload = cloudPayload();
     if (!apiBase || payload.appKey.length < 8 || !payload.chatId) return showToast("Completa API, chiave personale e Chat ID.");
@@ -699,7 +732,7 @@ function readSettingsForm() {
 
 function saveCloudSettings() {
   state.settings = readSettingsForm();
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState()));
+  writeStateToLocalStorage();
   syncCloud(true).catch((error) => {
     $("#cloudStatus").textContent = `Errore: ${error.message}`;
     showToast("Sincronizzazione non riuscita.");
@@ -968,7 +1001,7 @@ function setRecoveryCode(code) {
   state.settings.recoveryCode = clean;
   const input = $("#recoveryCodeInput");
   if (input) input.value = clean;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState()));
+  writeStateToLocalStorage();
 }
 
 function getEasyBackupCredentials() {
@@ -1017,7 +1050,7 @@ async function performOnlineBackup({ apiBase, appKey, password }) {
   if (!response.ok) throw new Error(result.error || `Errore ${response.status}`);
   state.settings.cloudBackupLast = result.updatedAt || new Date().toISOString();
   state.settings.cloudBackupBytes = Number(result.bytes) || 0;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState()));
+  writeStateToLocalStorage();
   setCloudBackupStatus(
     `Backup online completato: ${new Date(state.settings.cloudBackupLast).toLocaleString("it-IT")} · ${formatBytes(state.settings.cloudBackupBytes)}`,
     "success"
@@ -1034,7 +1067,7 @@ async function performOnlineRestore({ apiBase, appKey, password }) {
   await restoreBackupPackage(packageData, { preserveConnection: true });
   state.settings.cloudBackupLast = result.updatedAt || packageData.exportedAt || new Date().toISOString();
   state.settings.cloudBackupBytes = Number(result.bytes) || 0;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState()));
+  writeStateToLocalStorage();
   setCloudBackupStatus(
     `Backup ripristinato: ${new Date(state.settings.cloudBackupLast).toLocaleString("it-IT")} · ${formatBytes(state.settings.cloudBackupBytes)}`,
     "success"
@@ -1065,7 +1098,7 @@ async function restoreWithRecoveryCode() {
     $("#apiBase").value = credentials.apiBase;
     $("#appKey").value = credentials.appKey;
     $("#cloudBackupPassword").value = credentials.password;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState()));
+    writeStateToLocalStorage();
 
     await performOnlineRestore(credentials);
     setRecoveryCode(credentials.code);
@@ -1138,7 +1171,7 @@ function loadRecoveryCodeFromUrl() {
 
 function readBackupConnection({ requirePassword = true } = {}) {
   state.settings = readSettingsForm();
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState()));
+  writeStateToLocalStorage();
   const apiBase = normalizeApiBase(state.settings.apiBase);
   const appKey = state.settings.appKey.trim();
   const password = $("#cloudBackupPassword").value;
@@ -1185,7 +1218,7 @@ async function deleteOnlineBackup() {
     if (!response.ok) throw new Error(result.error || `Errore ${response.status}`);
     state.settings.cloudBackupLast = "";
     state.settings.cloudBackupBytes = 0;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState()));
+    writeStateToLocalStorage();
     setCloudBackupStatus("Backup cloud eliminato.", "success");
     showToast("Backup esterno eliminato.");
   } catch (error) {
@@ -1440,7 +1473,7 @@ function bindEvents() {
   $("#restoreWithCodeBtn").addEventListener("click", restoreWithRecoveryCode);
   $("#recoveryCodeInput").addEventListener("change", (event) => {
     state.settings.recoveryCode = event.target.value.trim();
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(serializableState()));
+    writeStateToLocalStorage();
   });
   $("#saveOnlineBackupBtn").addEventListener("click", saveOnlineBackup);
   $("#restoreOnlineBackupBtn").addEventListener("click", restoreOnlineBackup);
@@ -1471,6 +1504,8 @@ function bindEvents() {
 async function init() {
   bindEvents();
   await loadTherapyImages();
+  // Libera automaticamente eventuali dati pesanti lasciati dalle vecchie versioni.
+  writeStateToLocalStorage();
   renderAll();
   loadRecoveryCodeFromUrl();
   if ("serviceWorker" in navigator) {
