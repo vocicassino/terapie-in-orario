@@ -792,13 +792,21 @@ async function restoreBackupPackage(packageData, { preserveConnection = false } 
     throw new Error("Formato di backup non valido");
   }
 
-  const currentConnection = preserveConnection ? {
-    apiBase: normalizeApiBase($("#apiBase")?.value || state.settings.apiBase || ""),
-    appKey: $("#appKey")?.value?.trim() || state.settings.appKey || "",
-    chatId: $("#chatId")?.value?.trim() || state.settings.chatId || "",
-    timezone: $("#timezone")?.value?.trim() || state.settings.timezone || "Europe/Rome",
-    telegramEnabled: $("#telegramEnabled")?.checked ?? state.settings.telegramEnabled
-  } : {};
+  const currentConnection = {};
+  if (preserveConnection) {
+    const apiBase = normalizeApiBase($("#apiBase")?.value || state.settings.apiBase || "");
+    const appKey = $("#appKey")?.value?.trim() || state.settings.appKey || "";
+    const chatId = $("#chatId")?.value?.trim() || state.settings.chatId || "";
+    const timezone = $("#timezone")?.value?.trim() || state.settings.timezone || "";
+
+    // Sul nuovo dispositivo API e chiave arrivano dal codice di ripristino.
+    // Il Chat ID viene sovrascritto soltanto se sul dispositivo è già presente:
+    // in caso contrario resta quello incluso nel backup originale.
+    if (apiBase) currentConnection.apiBase = apiBase;
+    if (appKey) currentConnection.appKey = appKey;
+    if (chatId) currentConnection.chatId = chatId;
+    if (timezone) currentConnection.timezone = timezone;
+  }
 
   for (const url of therapyImageUrls.values()) URL.revokeObjectURL(url);
   therapyImageUrls.clear();
