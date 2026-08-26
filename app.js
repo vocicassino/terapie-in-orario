@@ -265,6 +265,63 @@ function inclusiveDurationDays(startIso, endIso) {
   return Math.round((end - start) / 86400000);
 }
 
+
+function normalizeTherapyText(value) {
+  return String(value || "")
+    .trim()
+    .toLocaleLowerCase("it-IT")
+    .replace(/\s+/g, " ");
+}
+
+function normalizedDays(therapy) {
+  return [...new Set((therapy?.days || []).map(Number))]
+    .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
+    .sort((a, b) => a - b);
+}
+
+function normalizedTimes(therapy) {
+  return [...new Set((therapy?.times || []).map(String))].sort();
+}
+
+function sameArrayValues(a, b) {
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+function dateRangesOverlap(first, second) {
+  const firstStart = first?.startDate || "0000-01-01";
+  const firstEnd = first?.endDate || "9999-12-31";
+  const secondStart = second?.startDate || "0000-01-01";
+  const secondEnd = second?.endDate || "9999-12-31";
+  return firstStart <= secondEnd && secondStart <= firstEnd;
+}
+
+function sameTherapySchedule(first, second) {
+  return (
+    normalizeTherapyText(first?.name) === normalizeTherapyText(second?.name) &&
+    normalizeTherapyText(first?.dose) === normalizeTherapyText(second?.dose) &&
+    sameArrayValues(normalizedDays(first), normalizedDays(second)) &&
+    sameArrayValues(normalizedTimes(first), normalizedTimes(second)) &&
+    monthIntervalValue(first) === monthIntervalValue(second)
+  );
+}
+
+function findDuplicateTherapy(candidate, excludeId = "") {
+  return state.therapies.find((other) =>
+    !other.archived &&
+    other.id !== excludeId &&
+    sameTherapySchedule(candidate, other) &&
+    dateRangesOverlap(candidate, other)
+  ) || null;
+}
+
+function todayDoseDuplicateKey(dose) {
+  return [
+    normalizeTherapyText(dose?.therapy?.name),
+    normalizeTherapyText(dose?.therapy?.dose),
+    String(dose?.time || "")
+  ].join("|");
+}
+
 function therapyApplies(therapy, date) {
   if (therapy.archived || !therapy.active) return false;
   const iso = localDateISO(date);
@@ -344,11 +401,23 @@ function renderToday() {
   const next = doses.find((dose) => !dose.log && timeToMinutes(dose.time) >= now.getHours() * 60 + now.getMinutes()) || doses.find((dose) => !dose.log);
   $("#nextDoseText").textContent = next ? `Prossima: ${next.therapy.name} alle ${next.time}` : doses.length ? "Programma completato per oggi." : "Aggiungi la prima terapia per iniziare.";
   $("#todayEmpty").classList.toggle("hidden", doses.length > 0);
+
+  const duplicateCounts = new Map();
+  doses.forEach((dose) => {
+    const key = todayDoseDuplicateKey(dose);
+    duplicateCounts.set(key, (duplicateCounts.get(key) || 0) + 1);
+  });
+  const alreadyRendered = new Set();
+
   const list = $("#todayList");
   list.innerHTML = doses.map((dose) => {
     const status = doseStatus(dose, now);
+    const duplicateKey = todayDoseDuplicateKey(dose);
+    const isDuplicate = (duplicateCounts.get(duplicateKey) || 0) > 1 && alreadyRendered.has(duplicateKey);
+    alreadyRendered.add(duplicateKey);
+
     return `
-      <article class="dose-card">
+      <article class="dose-card ${isDuplicate ? "duplicate-dose-card" : ""}">
         <div>
           <div class="time-badge">${escapeHTML(dose.time)}</div>
           ${therapyImageUrls.get(dose.therapy.id) ? imageHTML(therapyImageUrls.get(dose.therapy.id), "med-thumb small") : ""}
@@ -363,6 +432,13 @@ function renderToday() {
           </div>
           ${dose.therapy.barcode ? `<div class="therapy-times"><span class="chip code-chip">Codice: ${escapeHTML(dose.therapy.barcode)}</span></div>` : ""}
           ${dose.therapy.notes ? `<p class="dose-note">${escapeHTML(dose.therapy.notes)}</p>` : ""}
+          ${isDuplicate ? `
+            <div class="duplicate-warning">
+              <strong>⚠️ Possibile duplicato</strong>
+              <span>Questa terapia è già presente oggi allo stesso orario.</span>
+              <button class="action-remove-duplicate" data-action="remove-duplicate-therapy" data-id="${dose.therapy.id}" type="button">Rimuovi questa copia</button>
+            </div>
+          ` : ""}
           <div class="dose-actions">
             ${dose.log ? `
               <button class="action-reset" data-action="reset-dose" data-id="${dose.therapy.id}" data-time="${dose.time}" type="button">Annulla registrazione</button>
@@ -675,6 +751,14 @@ async function saveTherapy(event) {
     updatedAt: new Date().toISOString()
   };
   if (!therapy.name || !therapy.dose) return showToast("Compila nome e dose.");
+
+  const duplicate = findDuplicateTherapy(therapy, oldId);
+  if (duplicate) {
+    const duplicateMessage = `La terapia “${duplicate.name}” è già presente con gli stessi giorni e gli stessi orari in un periodo sovrapposto. La nuova copia non è stata salvata.`;
+    showToast("Terapia duplicata: salvataggio bloccato.");
+    window.alert(duplicateMessage);
+    return;
+  }
 
   try {
     if (currentTherapyImageBlob) {
@@ -1649,7 +1733,7 @@ function bindEvents() {
     renderArchive();
   });
 
-  document.addEventListener("click", (event) => {
+  document.addEventListener("click", async (event) => {
     const button = event.target.closest("[data-action]");
     if (!button) return;
     const { action, id, time } = button.dataset;
@@ -1658,6 +1742,22 @@ function bindEvents() {
     if (action === "reset-dose") resetDose(id, time);
     if (action === "edit-therapy") openTherapyDialog(id);
     if (action === "repeat-therapy") openRepeatTherapyDialog(id);
+    if (action === "remove-duplicate-therapy") {
+      const therapy = state.therapies.find((item) => item.id === id);
+      if (therapy && confirm(`Rimuovere la copia duplicata “${therapy.name}”? Verrà eliminata da tutte le giornate future e saranno rimossi anche gli eventuali eventi registrati per questa copia.`)) {
+        state.therapies = state.therapies.filter((item) => item.id !== id);
+        state.logs = state.logs.filter((log) => log.therapyId !== id);
+        try {
+          await deleteTherapyImage(id);
+        } catch (error) {
+          console.warn("Immagine duplicata non rimossa", error);
+        }
+        replaceTherapyImageUrl(id, null);
+        if (saveState()) {
+          showToast("Copia duplicata rimossa.");
+        }
+      }
+    }
     if (action === "toggle-therapy") {
       const therapy = state.therapies.find((item) => item.id === id);
       if (therapy) therapy.active = !therapy.active;

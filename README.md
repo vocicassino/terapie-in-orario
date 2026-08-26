@@ -1,21 +1,14 @@
-# Terapie in Orario – Ripeti + mesi alterni
+# Terapie in Orario – protezione duplicati
 
-Questa versione parte dalla versione con blocco dei promemoria quando una dose è già segnata come **Presa** o **Saltata**.
+Questa versione aggiunge:
 
-## Novità
-
-- Pulsante **↻ Ripeti** su ogni terapia corrente.
-- Il pulsante crea una nuova terapia già compilata con nome, dose, foto, codice a barre, giorni, orari, note e periodicità.
-- La nuova terapia parte dalla data odierna. Se la terapia originale aveva una durata definita, viene mantenuta la stessa durata.
-- Nuovo campo **Periodicità mensile** nella creazione/modifica della terapia:
-  - Ogni mese
-  - Mesi alterni (un mese sì, uno no)
-- Nei mesi alterni il mese della **Data inizio** è il primo mese attivo. Esempio: agosto → ottobre → dicembre.
-- La regola dei mesi alterni è applicata sia nella PWA sia nel Worker Cloudflare/Telegram.
-- Cache PWA aggiornata a `v11`.
+- controllo automatico prima del salvataggio: la stessa terapia non può essere inserita due volte se nome, dose, giorni, orari e periodicità coincidono e le date si sovrappongono;
+- nella pagina **Oggi**, eventuali duplicati già presenti vengono evidenziati;
+- sul duplicato compare **Rimuovi questa copia**, che elimina la copia errata anche dalle giornate future;
+- il Worker Cloudflare raggruppa eventuali copie equivalenti e invia **un solo promemoria Telegram**;
+- se una delle copie equivalenti è già stata segnata **Presa** o **Saltata**, il Worker non invia il promemoria per le altre copie;
+- cache PWA aggiornata alla versione 12.
 
 ## Aggiornamento
 
-1. Sostituisci i file della webapp su GitHub Pages.
-2. Sostituisci anche `cloudflare/worker.js` nel Worker e fai **Deploy**.
-3. Non devi cambiare KV, token Telegram o Cron Trigger.
+Sostituire i file della webapp su GitHub e sostituire anche `cloudflare/worker.js` nel Worker Cloudflare, quindi premere **Deploy**.
