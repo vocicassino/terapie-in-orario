@@ -3,6 +3,7 @@
 const STORAGE_KEY = "terapie-in-orario-v5";
 const LEGACY_STORAGE_KEYS = ["terapie-in-orario-v4", "terapie-in-orario-v3", "terapie-in-orario-v2", "terapie-in-orario-v1"];
 const NOTIFIED_KEY = "terapie-notified-v1";
+const PENDING_DOSE_SYNC_KEY = "terapie-dose-sync-pending-v1";
 const MEDIA_DB_NAME = "terapie-in-orario-media";
 const MEDIA_DB_VERSION = 1;
 const MEDIA_STORE = "therapy-images";
@@ -614,20 +615,158 @@ async function saveTherapy(event) {
   showToast(oldId ? "Terapia aggiornata." : "Terapia aggiunta.");
 }
 
+
+function doseSyncPayload(therapyId, time, status, date = localDateISO()) {
+  return {
+    appKey: state.settings.appKey.trim(),
+    therapyId,
+    date,
+    time,
+    status
+  };
+}
+
+function readPendingDoseSync() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PENDING_DOSE_SYNC_KEY) || "[]");
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePendingDoseSync(queue) {
+  localStorage.setItem(PENDING_DOSE_SYNC_KEY, JSON.stringify(queue));
+}
+
+function queueDoseStatusSync(therapyId, time, status, date = localDateISO()) {
+  if (!state.settings.telegramEnabled) return;
+
+  const payload = doseSyncPayload(therapyId, time, status, date);
+  if (!payload.appKey || payload.appKey.length < 8 || !state.settings.apiBase) return;
+
+  const key = `${date}:${therapyId}:${time}`;
+  const queue = readPendingDoseSync()
+    .filter((item) => `${item.date}:${item.therapyId}:${item.time}` !== key);
+
+  queue.push(payload);
+  writePendingDoseSync(queue);
+
+  flushDoseStatusSync().catch((error) => {
+    console.warn("Sincronizzazione stato dose rimandata", error);
+  });
+}
+
+async function flushDoseStatusSync() {
+  if (!state.settings.telegramEnabled) return;
+
+  const apiBase = normalizeApiBase(state.settings.apiBase);
+  const appKey = state.settings.appKey.trim();
+  if (!apiBase || appKey.length < 8) return;
+
+  let queue = readPendingDoseSync();
+  if (!queue.length) return;
+
+  const remaining = [];
+
+  for (const item of queue) {
+    try {
+      const response = await fetch(`${apiBase}/dose-status`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          ...item,
+          appKey
+        })
+      });
+
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(result.error || `Errore ${response.status}`);
+      }
+    } catch (error) {
+      console.warn("Stato dose non sincronizzato", item, error);
+      remaining.push(item);
+    }
+  }
+
+  writePendingDoseSync(remaining);
+}
+
+function updateLocalNotificationMemory(therapyId, time, completed, date = localDateISO()) {
+  const key = `${date}:${therapyId}:${time}`;
+  const notified = JSON.parse(localStorage.getItem(NOTIFIED_KEY) || "{}");
+
+  if (completed) {
+    notified[key] = new Date().toISOString();
+  } else {
+    delete notified[key];
+  }
+
+  localStorage.setItem(NOTIFIED_KEY, JSON.stringify(notified));
+}
+
+async function closeVisibleDoseNotification(therapyId, time, date = localDateISO()) {
+  if (!("serviceWorker" in navigator)) return;
+
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    const tag = `${date}:${therapyId}:${time}`;
+    const notifications = await registration.getNotifications({ tag });
+    notifications.forEach((notification) => notification.close());
+  } catch (error) {
+    console.warn("Impossibile chiudere la notifica locale", error);
+  }
+}
+
 function markDose(therapyId, time, status) {
   const date = localDateISO();
-  state.logs = state.logs.filter((item) => !(item.therapyId === therapyId && item.date === date && item.time === time));
+
+  state.logs = state.logs.filter(
+    (item) => !(item.therapyId === therapyId && item.date === date && item.time === time)
+  );
+
   const therapy = state.therapies.find((item) => item.id === therapyId);
-  state.logs.push({ id: uid(), therapyId, therapyName: therapy?.name || "", date, time, status, timestamp: new Date().toISOString() });
+
+  state.logs.push({
+    id: uid(),
+    therapyId,
+    therapyName: therapy?.name || "",
+    date,
+    time,
+    status,
+    timestamp: new Date().toISOString()
+  });
+
   saveState({ sync: false });
-  showToast(status === "taken" ? "Assunzione registrata." : "Dose segnata come saltata.");
+
+  // Impedisce notifiche locali successive e chiude quella eventualmente già visibile.
+  updateLocalNotificationMemory(therapyId, time, true, date);
+  closeVisibleDoseNotification(therapyId, time, date);
+
+  // Comunica subito a Cloudflare che la dose è già stata gestita.
+  // In questo modo il Cron Telegram non invia il promemoria più tardi.
+  queueDoseStatusSync(therapyId, time, status, date);
+
+  showToast(status === "taken"
+    ? "Assunzione registrata e promemoria disattivato."
+    : "Dose segnata come saltata e promemoria disattivato.");
 }
 
 function resetDose(therapyId, time) {
   const date = localDateISO();
-  state.logs = state.logs.filter((item) => !(item.therapyId === therapyId && item.date === date && item.time === time));
+
+  state.logs = state.logs.filter(
+    (item) => !(item.therapyId === therapyId && item.date === date && item.time === time)
+  );
+
   saveState({ sync: false });
-  showToast("Registrazione annullata.");
+
+  // Consente nuovamente il promemoria locale e rimuove il blocco sul Worker.
+  updateLocalNotificationMemory(therapyId, time, false, date);
+  queueDoseStatusSync(therapyId, time, "reset", date);
+
+  showToast("Registrazione annullata. Il promemoria può essere inviato di nuovo.");
 }
 
 async function requestNotifications() {
@@ -733,10 +872,13 @@ function readSettingsForm() {
 function saveCloudSettings() {
   state.settings = readSettingsForm();
   writeStateToLocalStorage();
-  syncCloud(true).catch((error) => {
-    $("#cloudStatus").textContent = `Errore: ${error.message}`;
-    showToast("Sincronizzazione non riuscita.");
-  });
+
+  syncCloud(true)
+    .then(() => flushDoseStatusSync())
+    .catch((error) => {
+      $("#cloudStatus").textContent = `Errore: ${error.message}`;
+      showToast("Sincronizzazione non riuscita.");
+    });
 }
 
 function formatBytes(bytes) {
@@ -1520,7 +1662,13 @@ async function init() {
     try { await navigator.serviceWorker.register("sw.js"); } catch (error) { console.error(error); }
   }
   checkDueNotifications();
-  setInterval(() => { renderToday(); checkDueNotifications(); }, 30000);
+  flushDoseStatusSync().catch(console.warn);
+
+  setInterval(() => {
+    renderToday();
+    checkDueNotifications();
+    flushDoseStatusSync().catch(console.warn);
+  }, 30000);
 }
 
 init();
