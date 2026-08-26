@@ -118,11 +118,14 @@ main { width: min(760px, 100%); margin: 0 auto; padding: 18px 16px 104px; }
 .input-action input { flex: 1; }
 .file-label { display: inline-flex !important; margin-top: 0 !important; cursor: pointer; }
 .file-label input { display: none; }
-input, textarea {
+input, textarea, select {
   width: 100%; margin-top: 6px; padding: 12px 13px;
   border: 1px solid #cddbd7; border-radius: 12px; background: #fff; color: var(--text);
 }
-input:focus, textarea:focus { outline: 3px solid rgba(23,107,91,.15); border-color: var(--primary); }
+input:focus, textarea:focus, select:focus { outline: 3px solid rgba(23,107,91,.15); border-color: var(--primary); }
+select { border: 1px solid #cddbd7; border-radius: 12px; background: #fff; color: var(--text); }
+.recurrence-chip { background: #fff1bd; color: #806000; border: 1px solid #efd98a; }
+.repeat-button { font-weight: 850; }
 .bottom-nav {
   position: fixed; z-index: 30; left: 50%; bottom: 0; transform: translateX(-50%);
   width: min(760px, 100%); display: grid; grid-template-columns: repeat(5, 1fr);

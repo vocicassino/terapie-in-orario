@@ -55,7 +55,8 @@ function loadState() {
         ? parsed.therapies.map((therapy) => ({
             ...therapy,
             archived: therapy.archived === true,
-            archivedAt: therapy.archivedAt || ""
+            archivedAt: therapy.archivedAt || "",
+            monthInterval: Math.max(1, Number.parseInt(therapy.monthInterval || 1, 10) || 1)
           }))
         : [],
       settings: { ...defaultState.settings, ...(parsed.settings || {}) }
@@ -233,11 +234,43 @@ function timeToMinutes(value) {
   return h * 60 + m;
 }
 
+function monthIntervalValue(therapy) {
+  return Math.max(1, Number.parseInt(therapy?.monthInterval || 1, 10) || 1);
+}
+
+function monthIntervalApplies(therapy, date) {
+  const interval = monthIntervalValue(therapy);
+  if (interval <= 1 || !therapy.startDate) return true;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(therapy.startDate);
+  if (!match) return true;
+  const startYear = Number(match[1]);
+  const startMonth = Number(match[2]) - 1;
+  const difference = (date.getFullYear() - startYear) * 12 + (date.getMonth() - startMonth);
+  return difference >= 0 && difference % interval === 0;
+}
+
+function addDaysToIso(iso, days) {
+  if (!iso || !Number.isFinite(days)) return "";
+  const date = new Date(`${iso}T12:00:00`);
+  if (Number.isNaN(date.getTime())) return "";
+  date.setDate(date.getDate() + days);
+  return localDateISO(date);
+}
+
+function inclusiveDurationDays(startIso, endIso) {
+  if (!startIso || !endIso) return null;
+  const start = new Date(`${startIso}T12:00:00`);
+  const end = new Date(`${endIso}T12:00:00`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return null;
+  return Math.round((end - start) / 86400000);
+}
+
 function therapyApplies(therapy, date) {
   if (therapy.archived || !therapy.active) return false;
   const iso = localDateISO(date);
   if (therapy.startDate && iso < therapy.startDate) return false;
   if (therapy.endDate && iso > therapy.endDate) return false;
+  if (!monthIntervalApplies(therapy, date)) return false;
   return therapy.days.includes(date.getDay());
 }
 
@@ -363,6 +396,7 @@ function therapyCardHtml(therapy, { archived = false } = {}) {
         <div class="meta-stack">
           <div class="therapy-times">${therapy.times.map((time) => `<span class="chip">${escapeHTML(time)}</span>`).join("")}</div>
           <p class="small-note">${therapy.days.length === 7 ? "Tutti i giorni" : therapy.days.map((d) => dayNames[d]).join(", ")}</p>
+          ${monthIntervalValue(therapy) === 2 ? `<div><span class="chip recurrence-chip">Mesi alterni</span></div>` : ""}
           ${therapy.barcode ? `<div><span class="chip code-chip">Codice a barre: ${escapeHTML(therapy.barcode)}</span></div>` : ""}
           ${therapy.notes ? `<p>${escapeHTML(therapy.notes)}</p>` : ""}
           ${archivedDate ? `<p class="small-note">Archiviata il ${escapeHTML(archivedDate)}</p>` : ""}
@@ -375,6 +409,7 @@ function therapyCardHtml(therapy, { archived = false } = {}) {
           <button class="text-btn danger-text small" data-action="delete-forever" data-id="${therapy.id}" type="button">Elimina definitivamente</button>
         ` : `
           <button class="secondary small" data-action="edit-therapy" data-id="${therapy.id}" type="button">Modifica</button>
+          <button class="secondary small repeat-button" data-action="repeat-therapy" data-id="${therapy.id}" type="button">↻ Ripeti</button>
           <button class="secondary small" data-action="toggle-therapy" data-id="${therapy.id}" type="button">${therapy.active ? "Sospendi" : "Riattiva"}</button>
           <button class="secondary small" data-action="archive-therapy" data-id="${therapy.id}" type="button">Archivia</button>
         `}
@@ -506,6 +541,7 @@ async function openTherapyDialog(id = "") {
   $("#startDate").value = therapy?.startDate || localDateISO();
   $("#endDate").value = therapy?.endDate || "";
   $("#therapyNotes").value = therapy?.notes || "";
+  $("#monthInterval").value = String(monthIntervalValue(therapy));
   $("#therapyActive").checked = therapy?.active ?? true;
   $("#therapyImageInput").value = "";
   currentTherapyImageBlob = null;
@@ -520,6 +556,54 @@ async function openTherapyDialog(id = "") {
 
 function closeTherapyDialog() {
   $("#therapyDialog").close();
+}
+
+async function openRepeatTherapyDialog(id) {
+  const therapy = state.therapies.find((item) => item.id === id);
+  if (!therapy) return;
+
+  $("#therapyForm").reset();
+  $("#timesList").innerHTML = "";
+  $("#therapyId").value = "";
+  $("#dialogTitle").textContent = `Ripeti: ${therapy.name}`;
+  $("#therapyName").value = therapy.name || "";
+  $("#therapyDose").value = therapy.dose || "";
+  $("#therapyBarcode").value = therapy.barcode || "";
+  $("#therapyNotes").value = therapy.notes || "";
+  $("#monthInterval").value = String(monthIntervalValue(therapy));
+  $("#therapyActive").checked = true;
+  $("#therapyImageInput").value = "";
+  currentTherapyImageBlob = null;
+  removeCurrentTherapyImage = false;
+
+  const today = localDateISO();
+  $("#startDate").value = today;
+  const duration = inclusiveDurationDays(therapy.startDate, therapy.endDate);
+  $("#endDate").value = duration === null ? "" : addDaysToIso(today, duration);
+
+  $$("input[name='days']").forEach((input) => {
+    input.checked = (therapy.days || []).includes(Number(input.value));
+  });
+  (therapy.times?.length ? therapy.times : ["08:00"]).forEach(addTimeInput);
+
+  if (therapy.hasImage) {
+    try {
+      const blob = await getTherapyImage(therapy.id);
+      if (blob) {
+        currentTherapyImageBlob = blob;
+        updateTherapyImagePreview(URL.createObjectURL(blob));
+      } else {
+        updateTherapyImagePreview("");
+      }
+    } catch (error) {
+      console.error("Immagine non copiata nella terapia ripetuta", error);
+      updateTherapyImagePreview("");
+    }
+  } else {
+    updateTherapyImagePreview("");
+  }
+
+  $("#therapyDialog").showModal();
 }
 
 async function fileToCompressedBlob(file, maxSize = 1000, quality = 0.8) {
@@ -584,6 +668,7 @@ async function saveTherapy(event) {
     startDate: $("#startDate").value,
     endDate: $("#endDate").value,
     notes: $("#therapyNotes").value.trim(),
+    monthInterval: Math.max(1, Number.parseInt($("#monthInterval").value || "1", 10) || 1),
     active: existing?.archived ? false : $("#therapyActive").checked,
     archived: existing?.archived === true,
     archivedAt: existing?.archivedAt || "",
@@ -813,8 +898,8 @@ function cloudPayload() {
     enabled: !!state.settings.telegramEnabled,
     therapies: state.therapies
       .filter((therapy) => !therapy.archived)
-      .map(({ id, name, dose, barcode, days, times, startDate, endDate, notes, active }) => ({
-        id, name, dose, barcode, days, times, startDate, endDate, notes, active
+      .map(({ id, name, dose, barcode, days, times, startDate, endDate, notes, monthInterval, active }) => ({
+        id, name, dose, barcode, days, times, startDate, endDate, notes, monthInterval: monthIntervalValue({ monthInterval }), active
       }))
   };
 }
@@ -1410,7 +1495,7 @@ function exportCsv() {
   const dayNames = ["Dom", "Lun", "Mar", "Mer", "Gio", "Ven", "Sab"];
   const rows = [[
     "Tipo record", "ID terapia", "Nome", "Dose", "Codice a barre", "Stato terapia",
-    "Archiviata", "Giorni", "Orari", "Data inizio", "Data fine", "Note",
+    "Archiviata", "Giorni", "Orari", "Periodicità mesi", "Data inizio", "Data fine", "Note",
     "Data evento", "Ora evento", "Esito"
   ]];
 
@@ -1419,8 +1504,8 @@ function exportCsv() {
       "TERAPIA", therapy.id, therapy.name, therapy.dose, therapy.barcode || "",
       therapy.active ? "Attiva" : "Sospesa", therapy.archived ? "Sì" : "No",
       (therapy.days || []).map((day) => dayNames[day]).join(", "),
-      (therapy.times || []).join(", "), therapy.startDate || "", therapy.endDate || "",
-      therapy.notes || "", "", "", ""
+      (therapy.times || []).join(", "), monthIntervalValue(therapy) === 2 ? "Mesi alterni" : "Ogni mese",
+      therapy.startDate || "", therapy.endDate || "", therapy.notes || "", "", "", ""
     ]);
   }
 
@@ -1428,7 +1513,7 @@ function exportCsv() {
     const therapy = state.therapies.find((item) => item.id === log.therapyId);
     rows.push([
       "ASSUNZIONE", log.therapyId, therapy?.name || log.therapyName || "", therapy?.dose || "",
-      therapy?.barcode || "", "", therapy?.archived ? "Sì" : "No", "", "", "", "", "",
+      therapy?.barcode || "", "", therapy?.archived ? "Sì" : "No", "", "", "", "", "", "",
       log.date || "", log.time || "", log.status === "taken" ? "Presa" : "Saltata"
     ]);
   }
@@ -1449,6 +1534,7 @@ function printPdfReport() {
       <p><strong>Stato:</strong> ${therapy.archived ? "Archiviata" : therapy.active ? "Attiva" : "Sospesa"}</p>
       <p><strong>Giorni:</strong> ${(therapy.days || []).map((day) => dayNames[day]).join(", ")}</p>
       <p><strong>Orari:</strong> ${(therapy.times || []).map(escapeHTML).join(", ")}</p>
+      <p><strong>Periodicità:</strong> ${monthIntervalValue(therapy) === 2 ? "Mesi alterni" : "Ogni mese"}</p>
       ${therapy.barcode ? `<p><strong>Codice:</strong> ${escapeHTML(therapy.barcode)}</p>` : ""}
       ${therapy.notes ? `<p><strong>Note:</strong> ${escapeHTML(therapy.notes)}</p>` : ""}
     </section>
@@ -1571,6 +1657,7 @@ function bindEvents() {
     if (action === "mark-skipped") markDose(id, time, "skipped");
     if (action === "reset-dose") resetDose(id, time);
     if (action === "edit-therapy") openTherapyDialog(id);
+    if (action === "repeat-therapy") openRepeatTherapyDialog(id);
     if (action === "toggle-therapy") {
       const therapy = state.therapies.find((item) => item.id === id);
       if (therapy) therapy.active = !therapy.active;
