@@ -1295,11 +1295,44 @@ function createRecoveryCode({ apiBase, appKey, password }) {
   return `TIO1.${bytesToBase64Url(encoded)}`;
 }
 
-function decodeRecoveryCode(code) {
-  const clean = String(code || "").trim().replace(/\s+/g, "");
+function normalizeRecoveryInput(value) {
+  let clean = String(value || "").trim();
+  if (!clean) throw new Error("Inserisci il codice di ripristino");
+
+  // Accetta anche il collegamento completo generato da “Condividi collegamento”.
+  try {
+    if (/^https?:\/\//i.test(clean)) {
+      const url = new URL(clean);
+      const fromUrl = url.searchParams.get("restore");
+      if (fromUrl) clean = fromUrl;
+    }
+  } catch {
+    // Se non è un URL valido continuiamo a trattarlo come codice.
+  }
+
+  clean = clean.replace(/\s+/g, "");
+
+  // Compatibilità prudente: alcune tastiere/copia-incolla possono perdere il prefisso.
+  // Se il contenuto sembra un payload Base64URL valido, ricostruiamo TIO1.
+  if (!clean.startsWith("TIO1.")) {
+    try {
+      const candidate = JSON.parse(new TextDecoder().decode(base64UrlToBytes(clean)));
+      if (candidate?.v === 1 && candidate?.api && candidate?.key && candidate?.secret) {
+        clean = `TIO1.${clean}`;
+      }
+    } catch {
+      // Verrà gestito dall'errore esplicito qui sotto.
+    }
+  }
+
   if (!clean.startsWith("TIO1.")) {
     throw new Error("Codice di ripristino non riconosciuto");
   }
+  return clean;
+}
+
+function decodeRecoveryCode(code) {
+  const clean = normalizeRecoveryInput(code);
   try {
     const payload = JSON.parse(new TextDecoder().decode(base64UrlToBytes(clean.slice(5))));
     const apiBase = normalizeApiBase(payload?.api || "");
@@ -1370,18 +1403,64 @@ async function performOnlineBackup({ apiBase, appKey, password }) {
   state.settings.cloudBackupLast = result.updatedAt || new Date().toISOString();
   state.settings.cloudBackupBytes = Number(result.bytes) || 0;
   writeStateToLocalStorage();
+
+  // Verifica che il backup sia davvero leggibile prima di confermare il successo.
+  setCloudBackupStatus("Backup salvato. Verifica disponibilità…", "working");
+  await fetchBackupWithRetry(apiBase, appKey, 4);
+
   setCloudBackupStatus(
-    `Backup online completato: ${new Date(state.settings.cloudBackupLast).toLocaleString("it-IT")} · ${formatBytes(state.settings.cloudBackupBytes)}`,
+    `Backup online completato e verificato: ${new Date(state.settings.cloudBackupLast).toLocaleString("it-IT")} · ${formatBytes(state.settings.cloudBackupBytes)}`,
     "success"
   );
   return result;
 }
 
+async function checkBackupWorker(apiBase) {
+  let response;
+  try {
+    response = await fetch(`${apiBase}/check?backup=${Date.now()}`, { cache: "no-store" });
+  } catch {
+    throw new Error("Impossibile raggiungere Cloudflare. Controlla la connessione Internet.");
+  }
+  const info = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(info.error || `Worker non raggiungibile (${response.status})`);
+  if (info.kvConfigured === false) throw new Error("Archivio Cloudflare KV non collegato al Worker.");
+  if (info.backupSupported === false) throw new Error("Il Worker Cloudflare non è aggiornato alla versione con Backup.");
+  return info;
+}
+
+async function fetchBackupWithRetry(apiBase, appKey, attempts = 6) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetch(
+        `${apiBase}/backup?appKey=${encodeURIComponent(appKey)}&_=${Date.now()}`,
+        { cache: "no-store" }
+      );
+      const result = await response.json().catch(() => ({}));
+      if (response.ok) return result;
+
+      const message = result.error || `Errore ${response.status}`;
+      // 404 può essere temporaneo subito dopo una scrittura KV: ritentiamo.
+      if (response.status !== 404 && response.status < 500) throw new Error(message);
+      lastError = new Error(message);
+    } catch (error) {
+      lastError = error;
+    }
+
+    if (attempt < attempts) {
+      setCloudBackupStatus(`Backup non ancora disponibile, nuovo tentativo ${attempt + 1}/${attempts}…`, "working");
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+    }
+  }
+  throw lastError || new Error("Backup non trovato su Cloudflare");
+}
+
 async function performOnlineRestore({ apiBase, appKey, password }) {
+  setCloudBackupStatus("Verifica del Worker Cloudflare…", "working");
+  await checkBackupWorker(apiBase);
   setCloudBackupStatus("Download e decifratura del backup…", "working");
-  const response = await fetch(`${apiBase}/backup?appKey=${encodeURIComponent(appKey)}`);
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(result.error || `Errore ${response.status}`);
+  const result = await fetchBackupWithRetry(apiBase, appKey);
   const packageData = await decryptBackupEnvelope(result.envelope, password);
   await restoreBackupPackage(packageData, { preserveConnection: true });
   state.settings.cloudBackupLast = result.updatedAt || packageData.exportedAt || new Date().toISOString();
@@ -1407,24 +1486,32 @@ async function easyBackup() {
 }
 
 async function restoreWithRecoveryCode() {
+  const previousSettings = structuredClone(state.settings);
   try {
     const credentials = decodeRecoveryCode($("#recoveryCodeInput")?.value || "");
     if (!confirm("Il ripristino sostituirà terapie, archivio, storico e fotografie presenti su questo dispositivo. Continuare?")) return;
 
-    state.settings.apiBase = credentials.apiBase;
-    state.settings.appKey = credentials.appKey;
-    state.settings.recoveryCode = credentials.code;
+    // Impostiamo temporaneamente i dati nel form, ma li rendiamo permanenti
+    // soltanto dopo che il backup è stato realmente scaricato e decifrato.
     $("#apiBase").value = credentials.apiBase;
     $("#appKey").value = credentials.appKey;
     $("#cloudBackupPassword").value = credentials.password;
-    writeStateToLocalStorage();
+    state.settings.apiBase = credentials.apiBase;
+    state.settings.appKey = credentials.appKey;
+    state.settings.recoveryCode = credentials.code;
 
     await performOnlineRestore(credentials);
     setRecoveryCode(credentials.code);
-    showToast("Backup ripristinato con il codice unico.");
+    showToast("Backup ripristinato correttamente.");
   } catch (error) {
-    setCloudBackupStatus(`Errore: ${error.message}`, "error");
-    showToast("Ripristino non riuscito.");
+    console.error("Ripristino backup fallito", error);
+    state.settings = { ...previousSettings };
+    renderSettings();
+    const message = error?.message || "Errore sconosciuto";
+    setCloudBackupStatus(`Errore: ${message}`, "error");
+    const status = $("#cloudBackupStatus");
+    status?.scrollIntoView({ behavior: "smooth", block: "center" });
+    showToast(message.length > 70 ? "Ripristino non riuscito: controlla il messaggio in rosso." : message);
   }
 }
 
