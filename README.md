@@ -26,3 +26,16 @@ La webapp resta un promemoria personale e non sostituisce le indicazioni del med
 - Corretto il menu in basso su smartphone piccoli.
 - Le scritte non si accavallano più.
 - Su schermi stretti restano visibili sempre le icone e l'etichetta della sezione attiva.
+
+
+## v19 – Ripristino promemoria Telegram
+
+- Il profilo Telegram viene riallineato automaticamente a Cloudflare ad ogni apertura dell'app.
+- Attivare/disattivare il toggle Telegram viene salvato e sincronizzato subito.
+- Dopo un ripristino backup, il profilo Telegram viene ricreato automaticamente.
+- Nuovo pulsante **Verifica e ripara Telegram** nelle Impostazioni.
+- Il Worker registra un heartbeat del Cron Trigger e la diagnostica mostra l'ultima esecuzione.
+- La diagnostica controlla: Worker, token Telegram, profilo, Chat ID, numero di terapie e Cron.
+
+### Aggiornamento obbligatorio
+Per questa versione va aggiornato anche `cloudflare/worker.js` su Cloudflare e va mantenuto il Cron Trigger consigliato `*/15 * * * *`.

@@ -1175,6 +1175,125 @@ async function syncCloud(showMessage = true) {
   return data;
 }
 
+function setTelegramHealthStatus(text, type = "", details = "") {
+  const status = $("#telegramHealthStatus");
+  const info = $("#telegramHealthDetails");
+  if (status) {
+    status.textContent = text;
+    status.className = `status-pill${type ? ` ${type}` : ""}`;
+  }
+  if (info && details) info.textContent = details;
+}
+
+function telegramConfigReady() {
+  const apiBase = normalizeApiBase(state.settings.apiBase || "");
+  const appKey = String(state.settings.appKey || "").trim();
+  const chatId = String(state.settings.chatId || "").trim();
+  return !!apiBase && appKey.length >= 8 && /^-?\d+$/.test(chatId);
+}
+
+async function fetchTelegramHealth() {
+  const apiBase = normalizeApiBase(state.settings.apiBase || "");
+  const response = await fetch(`${apiBase}/telegram-health?_=${Date.now()}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "cache-control": "no-store" },
+    body: JSON.stringify({
+      appKey: String(state.settings.appKey || "").trim(),
+      chatId: String(state.settings.chatId || "").trim()
+    }),
+    cache: "no-store"
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(result.error || `Errore ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
+  return result;
+}
+
+async function ensureTelegramProfile({ showMessage = false } = {}) {
+  if (!state.settings.telegramEnabled || !telegramConfigReady()) return false;
+  try {
+    await syncCloud(false);
+    await flushDoseStatusSync();
+    if (showMessage) showToast("Profilo Telegram sincronizzato.");
+    return true;
+  } catch (error) {
+    console.warn("Ripristino automatico profilo Telegram non riuscito", error);
+    return false;
+  }
+}
+
+async function checkAndRepairTelegram({ sendTest = false, showMessage = true } = {}) {
+  state.settings = readSettingsForm();
+  writeStateToLocalStorage();
+
+  if (!state.settings.telegramEnabled) {
+    setTelegramHealthStatus("Disattivato", "warning", "Attiva Promemoria Telegram per ricevere gli avvisi.");
+    if (showMessage) showToast("Promemoria Telegram disattivato.");
+    return false;
+  }
+  if (!telegramConfigReady()) {
+    setTelegramHealthStatus("Configurazione incompleta", "error", "Apri Configurazione tecnica e controlla API, Chiave personale e Chat ID.");
+    if (showMessage) showToast("Configurazione Telegram incompleta.");
+    return false;
+  }
+
+  setTelegramHealthStatus("Controllo…", "syncing", "Verifica del Worker Cloudflare e del profilo Telegram in corso…");
+  try {
+    let health;
+    try {
+      health = await fetchTelegramHealth();
+    } catch (error) {
+      // Se il Worker non ha ancora l'endpoint v19, proviamo comunque a
+      // risincronizzare il profilo e poi segnaliamo che va aggiornato.
+      if (error?.status === 404) {
+        await ensureTelegramProfile({ showMessage: false });
+        throw new Error("Worker Cloudflare da aggiornare alla v19 per la diagnostica Telegram.");
+      }
+      throw error;
+    }
+
+    const localTherapies = state.therapies.filter((therapy) => !therapy.archived).length;
+    const needsRepair = !health.profileExists || !health.profileEnabled || health.chatMatches === false || Number(health.profileTherapies || 0) !== localTherapies;
+    if (needsRepair) {
+      setTelegramHealthStatus("Riparazione…", "syncing", "Il profilo Cloudflare non era allineato. Lo sto ricreando automaticamente…");
+      await syncCloud(false);
+      health = await fetchTelegramHealth();
+    }
+
+    if (!health.telegramConfigured) {
+      throw new Error("TELEGRAM_BOT_TOKEN non configurato nel Worker Cloudflare.");
+    }
+    if (!health.profileExists || !health.profileEnabled) {
+      throw new Error("Profilo Telegram non attivo su Cloudflare.");
+    }
+    if (health.chatMatches === false) {
+      throw new Error("Il Chat ID salvato nell'app non coincide con quello del profilo Cloudflare.");
+    }
+
+    const cronAge = Number(health.cronAgeMinutes);
+    if (!health.lastCronAt || !Number.isFinite(cronAge) || cronAge > 35) {
+      setTelegramHealthStatus("Cron da controllare", "warning", health.lastCronAt
+        ? `Ultimo controllo automatico ${Math.round(cronAge)} minuti fa. Verifica il Cron Trigger Cloudflare.`
+        : "Il Worker non registra ancora esecuzioni del Cron Trigger. Verifica il Cron su Cloudflare.");
+      if (showMessage) showToast("Telegram collegato, ma il Cron Cloudflare va controllato.");
+      return false;
+    }
+
+    setTelegramHealthStatus("Funzionante", "success", `Profilo attivo · ${health.profileTherapies} terapie · ultimo Cron ${Math.max(0, Math.round(cronAge))} min fa.`);
+    if (sendTest) await testTelegram();
+    else if (showMessage) showToast("Telegram e promemoria Cloudflare risultano attivi.");
+    return true;
+  } catch (error) {
+    console.error("Diagnostica Telegram", error);
+    setTelegramHealthStatus("Errore", "error", error?.message || "Controllo Telegram non riuscito.");
+    if (showMessage) showToast(error?.message || "Controllo Telegram non riuscito.");
+    return false;
+  }
+}
+
 async function testTelegram() {
   try {
     state.settings = readSettingsForm();
@@ -1217,7 +1336,10 @@ function saveCloudSettings() {
   writeStateToLocalStorage();
 
   syncCloud(true)
-    .then(() => flushDoseStatusSync())
+    .then(async () => {
+      await flushDoseStatusSync();
+      if (state.settings.telegramEnabled) checkAndRepairTelegram({ sendTest: false, showMessage: false }).catch(console.warn);
+    })
     .catch((error) => {
       $("#cloudStatus").textContent = `Errore: ${error.message}`;
       showToast("Sincronizzazione non riuscita.");
@@ -1890,6 +2012,10 @@ async function restoreWithRecoveryCode() {
 
     await performOnlineRestore(credentials);
     setRecoveryCode(credentials.code);
+    if (state.settings.telegramEnabled) {
+      await ensureTelegramProfile({ showMessage: false });
+      checkAndRepairTelegram({ sendTest: false, showMessage: false }).catch(console.warn);
+    }
     showToast("Backup ripristinato correttamente.");
   } catch (error) {
     console.error("Ripristino backup fallito", error);
@@ -2291,6 +2417,24 @@ function bindEvents() {
   $("#clearHistoryBtn").addEventListener("click", () => { if (state.logs.length && confirm("Vuoi eliminare tutto lo storico?")) { state.logs = []; saveState({ sync: false }); } });
   $("#notificationBtn").addEventListener("click", requestNotifications);
   $("#generateKeyBtn").addEventListener("click", () => { $("#appKey").value = [...crypto.getRandomValues(new Uint8Array(16))].map((n) => n.toString(16).padStart(2, "0")).join(""); });
+  $("#telegramEnabled")?.addEventListener("change", async (event) => {
+    state.settings = readSettingsForm();
+    state.settings.telegramEnabled = event.target.checked;
+    writeStateToLocalStorage();
+    if (telegramConfigReady()) {
+      try {
+        await syncCloud(false);
+        if (event.target.checked) await checkAndRepairTelegram({ sendTest: false, showMessage: true });
+        else {
+          setTelegramHealthStatus("Disattivato", "warning", "Promemoria Telegram disattivato e profilo Cloudflare aggiornato.");
+          showToast("Promemoria Telegram disattivato.");
+        }
+      } catch (error) {
+        setTelegramHealthStatus("Errore", "error", error?.message || "Sincronizzazione non riuscita.");
+      }
+    }
+  });
+  $("#telegramHealthBtn")?.addEventListener("click", () => checkAndRepairTelegram({ sendTest: true, showMessage: true }));
   $("#saveCloudBtn").addEventListener("click", saveCloudSettings);
   $("#testTelegramBtn").addEventListener("click", testTelegram);
   $("#easyBackupBtn").addEventListener("click", easyBackup);
@@ -2355,6 +2499,18 @@ async function init() {
   }
   checkDueNotifications();
   flushDoseStatusSync().catch(console.warn);
+  // v19: ad ogni apertura ricrea/allinea il profilo Cloudflare se Telegram è attivo.
+  // Questo risolve i casi in cui un ripristino o un cambio dispositivo lascia
+  // il profilo remoto assente, disattivato o non aggiornato.
+  if (state.settings.telegramEnabled) {
+    setTimeout(() => {
+      ensureTelegramProfile({ showMessage: false })
+        .then(() => checkAndRepairTelegram({ sendTest: false, showMessage: false }))
+        .catch(console.warn);
+    }, 1200);
+  } else {
+    setTelegramHealthStatus("Disattivato", "warning", "Attiva Promemoria Telegram per ricevere gli avvisi.");
+  }
 
   setInterval(() => {
     renderToday();

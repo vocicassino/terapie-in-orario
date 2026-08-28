@@ -608,3 +608,13 @@ input,textarea,select { border-radius:13px; background:#fff; }
     padding-bottom: 12px;
   }
 }
+
+
+/* ===== v19 Telegram health ===== */
+.telegram-health-row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:14px; }
+.telegram-health-row .secondary { flex:1 1 210px; }
+#telegramHealthStatus.success { background:#dff3ed; color:#116050; }
+#telegramHealthStatus.warning { background:#fff1bd; color:#806000; }
+#telegramHealthStatus.error { background:#fee2e2; color:#922f2f; }
+#telegramHealthStatus.syncing { background:#e1f1fa; color:#275e80; }
+@media (max-width:480px){ .telegram-health-row{align-items:stretch}.telegram-health-row .secondary{width:100%}#telegramHealthStatus{text-align:center} }
