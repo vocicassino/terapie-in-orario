@@ -515,10 +515,13 @@ function renderCalendar() {
   grid.innerHTML = cells.join("");
   const stats = monthStatistics(calendarCursor);
   $("#statsGrid").innerHTML = `
-    <div class="stat-card"><strong>${stats.adherence}%</strong><span>Aderenza</span></div>
-    <div class="stat-card"><strong>${stats.taken}</strong><span>Prese</span></div>
-    <div class="stat-card"><strong>${stats.skipped}</strong><span>Saltate</span></div>
-    <div class="stat-card"><strong>${stats.missed}</strong><span>Non registrate</span></div>`;
+    <div class="stat-card adherence-card">
+      <div class="adherence-ring" style="--value:${stats.adherence}"><div><strong>${stats.adherence}%</strong><span>Aderenza</span></div></div>
+      <p>del mese selezionato</p>
+    </div>
+    <div class="stat-card stat-taken"><span class="stat-icon">✓</span><strong>${stats.taken}</strong><span>Prese</span></div>
+    <div class="stat-card stat-skipped"><span class="stat-icon">−</span><strong>${stats.skipped}</strong><span>Saltate</span></div>
+    <div class="stat-card stat-missed"><span class="stat-icon">!</span><strong>${stats.missed}</strong><span>Non registrate</span></div>`;
   const worst = $("#worstTherapyCard");
   if (stats.worst) {
     worst.classList.remove("hidden");
@@ -543,7 +546,10 @@ function renderToday() {
   const completed = doses.filter((dose) => ["taken", "skipped"].includes(dose.log?.status)).length;
   $("#todayDate").textContent = formatLongDate(now);
   $("#progressValue").textContent = `${completed}/${doses.length}`;
+  const progressFill = $("#progressFill");
+  if (progressFill) progressFill.style.width = `${doses.length ? Math.round((completed / doses.length) * 100) : 0}%`;
   const next = doses.filter((dose) => !dose.log).sort((a,b) => doseMoment(a,now)-doseMoment(b,now))[0];
+  const nextKey = next ? `${next.therapy.id}|${doseOriginalDate(next, now)}|${next.time}` : "";
   $("#nextDoseText").textContent = next ? `Prossima: ${next.therapy.name} alle ${doseDisplayTime(next)}` : doses.length ? "Programma completato per oggi." : "Aggiungi la prima terapia per iniziare.";
   $("#todayEmpty").classList.toggle("hidden", doses.length > 0);
 
@@ -562,9 +568,12 @@ function renderToday() {
     const isDuplicate = (duplicateCounts.get(duplicateKey) || 0) > 1 && alreadyRendered.has(duplicateKey);
     alreadyRendered.add(duplicateKey);
     const stock = stockText(dose.therapy);
+    const doseKey = `${dose.therapy.id}|${originalDate}|${dose.time}`;
+    const isNextDose = !!nextKey && doseKey === nextKey;
     return `
-      <article class="dose-card ${isDuplicate ? "duplicate-dose-card" : ""}">
-        <div>
+      <article class="dose-card ${isNextDose ? "featured-dose" : ""} ${dose.log ? "completed-dose" : ""} ${isDuplicate ? "duplicate-dose-card" : ""}">
+        ${isNextDose ? `<div class="featured-kicker"><span></span> Prossima terapia</div>` : ""}
+        <div class="dose-side">
           <div class="time-badge">${escapeHTML(displayTime)}${dose.snooze ? `<small>era ${escapeHTML(dose.time)}</small>` : ""}</div>
           ${therapyImageUrls.get(dose.therapy.id) ? imageHTML(therapyImageUrls.get(dose.therapy.id), "med-thumb small") : ""}
         </div>
@@ -594,39 +603,47 @@ function therapyCardHtml(therapy, { archived = false } = {}) {
   const archivedDate = therapy.archivedAt
     ? new Intl.DateTimeFormat("it-IT", { dateStyle: "medium" }).format(new Date(therapy.archivedAt))
     : "";
+  const image = therapyImageUrls.get(therapy.id);
+  const initial = escapeHTML(String(therapy.name || "T").trim().charAt(0).toUpperCase());
 
   return `
     <article class="therapy-card ${therapy.active && !archived ? "" : "inactive"}">
       <div class="therapy-card-top">
-        <div>
-          <h3>${escapeHTML(therapy.name)}</h3>
-          <p class="muted">${escapeHTML(therapy.dose)}</p>
+        <div class="therapy-title-row">
+          ${image ? imageHTML(image, "med-thumb-card") : `<div class="therapy-placeholder" aria-hidden="true">${initial}</div>`}
+          <div class="therapy-heading-copy">
+            <h3>${escapeHTML(therapy.name)}</h3>
+            <p class="muted">${escapeHTML(therapy.dose)}</p>
+          </div>
         </div>
-        <span class="status-pill">${archived ? "Archiviata" : therapy.active ? "Attiva" : "Sospesa"}</span>
+        <span class="status-pill ${archived ? "archived" : therapy.active ? "active" : "paused"}">${archived ? "Archiviata" : therapy.active ? "Attiva" : "Sospesa"}</span>
       </div>
-      <div class="therapy-card-media">
-        ${therapyImageUrls.get(therapy.id) ? imageHTML(therapyImageUrls.get(therapy.id), "med-thumb-card") : ""}
-        <div class="meta-stack">
-          <div class="therapy-times">${therapy.times.map((time) => `<span class="chip">${escapeHTML(time)}</span>`).join("")}</div>
-          <p class="small-note">${therapy.days.length === 7 ? "Tutti i giorni" : therapy.days.map((d) => dayNames[d]).join(", ")}</p>
-          ${monthIntervalValue(therapy) === 2 ? `<div><span class="chip recurrence-chip">Mesi alterni</span></div>` : ""}
-          ${therapy.barcode ? `<div><span class="chip code-chip">Codice a barre: ${escapeHTML(therapy.barcode)}</span></div>` : ""}
-          ${stockEnabled(therapy) ? `<div><span class="chip stock-chip ${isLowStock(therapy) ? "low" : ""}">Scorta: ${escapeHTML(stockText(therapy))} · ${escapeHTML(String(therapy.doseUnits || 1))}/dose</span></div>` : ""}
-          ${isLowStock(therapy) ? `<div class="stock-warning">⚠️ Scorta bassa: valuta il rifornimento.</div>` : ""}
-          ${therapy.notes ? `<p>${escapeHTML(therapy.notes)}</p>` : ""}
-          ${archivedDate ? `<p class="small-note">Archiviata il ${escapeHTML(archivedDate)}</p>` : ""}
+      <div class="therapy-card-body">
+        <div class="therapy-times">${therapy.times.map((time) => `<span class="chip time-chip">${escapeHTML(time)}</span>`).join("")}</div>
+        <p class="schedule-copy">${therapy.days.length === 7 ? "Tutti i giorni" : therapy.days.map((d) => dayNames[d]).join(", ")}</p>
+        <div class="therapy-badges">
+          ${monthIntervalValue(therapy) === 2 ? `<span class="chip recurrence-chip">Mesi alterni</span>` : ""}
+          ${stockEnabled(therapy) ? `<span class="chip stock-chip ${isLowStock(therapy) ? "low" : ""}">Scorta ${escapeHTML(stockText(therapy))}</span>` : ""}
+          ${therapy.barcode ? `<span class="chip code-chip">Cod. ${escapeHTML(therapy.barcode)}</span>` : ""}
         </div>
+        ${isLowStock(therapy) ? `<div class="stock-warning">⚠️ Scorta bassa: valuta il rifornimento.</div>` : ""}
+        ${therapy.notes ? `<p class="therapy-note">${escapeHTML(therapy.notes)}</p>` : ""}
+        ${archivedDate ? `<p class="small-note">Archiviata il ${escapeHTML(archivedDate)}</p>` : ""}
       </div>
-      <div class="card-menu">
+      <div class="card-menu modern-card-menu">
         ${archived ? `
           <button class="primary small" data-action="restore-therapy" data-id="${therapy.id}" type="button">Ripristina</button>
-          <button class="secondary small" data-action="edit-therapy" data-id="${therapy.id}" type="button">Consulta / modifica</button>
-          <button class="text-btn danger-text small" data-action="delete-forever" data-id="${therapy.id}" type="button">Elimina definitivamente</button>
+          <details class="card-more"><summary aria-label="Altre azioni">•••</summary><div class="card-more-menu">
+            <button data-action="edit-therapy" data-id="${therapy.id}" type="button">Consulta / modifica</button>
+            <button class="danger-text" data-action="delete-forever" data-id="${therapy.id}" type="button">Elimina definitivamente</button>
+          </div></details>
         ` : `
           <button class="secondary small" data-action="edit-therapy" data-id="${therapy.id}" type="button">Modifica</button>
           <button class="secondary small repeat-button" data-action="repeat-therapy" data-id="${therapy.id}" type="button">↻ Ripeti</button>
-          <button class="secondary small" data-action="toggle-therapy" data-id="${therapy.id}" type="button">${therapy.active ? "Sospendi" : "Riattiva"}</button>
-          <button class="secondary small" data-action="archive-therapy" data-id="${therapy.id}" type="button">Archivia</button>
+          <details class="card-more"><summary aria-label="Altre azioni">•••</summary><div class="card-more-menu">
+            <button data-action="toggle-therapy" data-id="${therapy.id}" type="button">${therapy.active ? "Sospendi" : "Riattiva"}</button>
+            <button data-action="archive-therapy" data-id="${therapy.id}" type="button">Archivia</button>
+          </div></details>
         `}
       </div>
     </article>`;
@@ -689,6 +706,12 @@ function renderHistory() {
 
 function renderSettings() {
   const s = state.settings;
+  const headerSync = $("#headerSyncStatus");
+  if (headerSync) {
+    const cloudReady = !!(s.apiBase && (s.backupId || s.appKey));
+    const synced = !!s.lastDeviceSyncAt || !!s.cloudBackupLast;
+    headerSync.innerHTML = `<span class="sync-dot ${cloudReady ? "online" : ""}"></span>${cloudReady ? (synced ? "Sincronizzato" : "Cloud") : "Locale"}`;
+  }
   $("#telegramEnabled").checked = !!s.telegramEnabled;
   if ($("#multiDeviceSyncEnabled")) $("#multiDeviceSyncEnabled").checked = s.multiDeviceSyncEnabled !== false;
   if ($("#multiDeviceSyncStatus") && s.lastDeviceSyncAt) {

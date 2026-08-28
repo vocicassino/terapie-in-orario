@@ -3,39 +3,48 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#176b5b">
+  <meta name="theme-color" content="#0f7665">
   <meta name="description" content="Promemoria personale per l'assunzione delle terapie.">
   <title>Terapie in Orario</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=17">
 </head>
 <body>
   <header class="app-header">
-    <div>
-      <p class="eyebrow">Promemoria personale</p>
-      <h1>Terapie in Orario</h1>
+    <div class="brand-lockup">
+      <div class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M8.6 3.4a5.2 5.2 0 0 1 7.4 0l4.6 4.6a5.2 5.2 0 0 1-7.4 7.4l-4.6-4.6a5.2 5.2 0 0 1 0-7.4Zm1.5 1.5a3.1 3.1 0 0 0 0 4.4l1.3 1.3 4.4-4.4-1.3-1.3a3.1 3.1 0 0 0-4.4 0Zm2.8 7.2 1.8 1.8a3.1 3.1 0 1 0 4.4-4.4l-1.8-1.8-4.4 4.4Z"/></svg>
+      </div>
+      <div>
+        <p class="eyebrow">Promemoria personale</p>
+        <h1>Terapie in Orario</h1>
+      </div>
     </div>
-    <button id="installBtn" class="icon-btn hidden" type="button">Installa</button>
+    <div class="header-actions">
+      <span id="headerSyncStatus" class="header-sync" title="Stato sincronizzazione"><span class="sync-dot"></span> Locale</span>
+      <button id="installBtn" class="icon-btn install-pill hidden" type="button">Installa</button>
+    </div>
   </header>
 
   <main>
     <section id="view-today" class="view active" aria-labelledby="todayTitle">
       <div class="hero-card">
-        <div>
-          <p id="todayDate" class="muted"></p>
-          <h2 id="todayTitle">Le terapie di oggi</h2>
-          <p id="nextDoseText">Aggiungi la prima terapia per iniziare.</p>
+        <div class="hero-copy">
+          <p class="hero-label">OGGI</p>
+          <p id="todayDate" class="hero-date"></p>
+          <h2 id="todayTitle">Le tue terapie</h2>
+          <p id="nextDoseText" class="hero-next">Aggiungi la prima terapia per iniziare.</p>
         </div>
-        <div id="progressRing" class="progress-ring" aria-label="Progresso di oggi">
-          <strong id="progressValue">0/0</strong>
-          <span>completate</span>
+        <div id="progressRing" class="today-progress" aria-label="Progresso di oggi">
+          <div class="progress-copy"><span>Completate</span><strong id="progressValue">0/0</strong></div>
+          <div class="progress-track" aria-hidden="true"><span id="progressFill"></span></div>
         </div>
       </div>
 
-      <div class="section-heading">
-        <h3>Programma</h3>
-        <button id="addFromTodayBtn" class="primary small" type="button">+ Terapia</button>
+      <div class="section-heading today-heading">
+        <div><p class="eyebrow">Programma</p><h3>Le dosi di oggi</h3></div>
+        <button id="addFromTodayBtn" class="primary small add-pill" type="button"><span>＋</span> Terapia</button>
       </div>
       <div id="todayList" class="card-list"></div>
       <div id="todayEmpty" class="empty-state">
@@ -126,38 +135,42 @@
         </div>
       </article>
 
-      <article class="settings-card">
+      <article class="settings-card settings-feature-card">
         <div class="switch-row">
-          <div>
-            <h3>Promemoria Telegram</h3>
-            <p>Cloudflare controlla gli orari e il bot invia il messaggio anche se la webapp è chiusa.</p>
+          <div class="settings-title-with-icon">
+            <span class="settings-icon telegram-icon" aria-hidden="true">↗</span>
+            <div><h3>Promemoria Telegram</h3><p>Ricevi gli avvisi anche quando la webapp è chiusa.</p></div>
           </div>
           <label class="switch">
             <input id="telegramEnabled" type="checkbox">
             <span></span>
           </label>
         </div>
-
-        <label>Indirizzo API Cloudflare
-          <input id="apiBase" type="url" placeholder="https://nome-worker.workers.dev">
-        </label>
-        <label>Chiave personale
-          <div class="input-action">
-            <input id="appKey" type="text" autocomplete="off" placeholder="Almeno 8 caratteri">
-            <button id="generateKeyBtn" class="secondary" type="button">Genera</button>
+        <details class="settings-details">
+          <summary>Configurazione tecnica</summary>
+          <div class="settings-details-body">
+            <label>Indirizzo API Cloudflare
+              <input id="apiBase" type="url" placeholder="https://nome-worker.workers.dev">
+            </label>
+            <label>Chiave personale
+              <div class="input-action">
+                <input id="appKey" type="text" autocomplete="off" placeholder="Almeno 8 caratteri">
+                <button id="generateKeyBtn" class="secondary" type="button">Genera</button>
+              </div>
+            </label>
+            <label>Chat ID Telegram
+              <input id="chatId" type="text" inputmode="numeric" placeholder="Esempio: 123456789">
+            </label>
+            <label>Fuso orario
+              <input id="timezone" type="text" value="Europe/Rome">
+            </label>
+            <div class="row-actions">
+              <button id="saveCloudBtn" class="primary" type="button">Salva e sincronizza</button>
+              <button id="testTelegramBtn" class="secondary" type="button">Messaggio di prova</button>
+            </div>
+            <p id="cloudStatus" class="small-note"></p>
           </div>
-        </label>
-        <label>Chat ID Telegram
-          <input id="chatId" type="text" inputmode="numeric" placeholder="Esempio: 123456789">
-        </label>
-        <label>Fuso orario
-          <input id="timezone" type="text" value="Europe/Rome">
-        </label>
-        <div class="row-actions">
-          <button id="saveCloudBtn" class="primary" type="button">Salva e sincronizza</button>
-          <button id="testTelegramBtn" class="secondary" type="button">Messaggio di prova</button>
-        </div>
-        <p id="cloudStatus" class="small-note"></p>
+        </details>
       </article>
 
 
@@ -251,12 +264,12 @@
   </main>
 
   <nav class="bottom-nav" aria-label="Navigazione principale">
-    <button class="nav-btn active" data-view="today" type="button"><span>◷</span>Oggi</button>
-    <button class="nav-btn" data-view="therapies" type="button"><span>💊</span>Terapie</button>
-    <button class="nav-btn" data-view="archive" type="button"><span>🗃️</span>Archivio</button>
-    <button class="nav-btn" data-view="calendar" type="button"><span>▦</span>Calendario</button>
-    <button class="nav-btn" data-view="history" type="button"><span>✓</span>Storico</button>
-    <button class="nav-btn" data-view="settings" type="button"><span>⚙</span>Impostazioni</button>
+    <button class="nav-btn active" data-view="today" type="button"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M3 11.2 12 4l9 7.2V21a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1v-9.8Z"/></svg></span><span class="nav-label">Oggi</span></button>
+    <button class="nav-btn" data-view="therapies" type="button"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M8.7 3.3a5 5 0 0 1 7.1 0l4.9 4.9a5 5 0 0 1-7.1 7.1L8.7 10.4a5 5 0 0 1 0-7.1Zm1.5 1.5a2.9 2.9 0 0 0 0 4.1l1.4 1.4 4.1-4.1-1.4-1.4a2.9 2.9 0 0 0-4.1 0Z"/></svg></span><span class="nav-label">Terapie</span></button>
+    <button class="nav-btn" data-view="archive" type="button"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 3h16l1 4v2h-1v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V9H3V7l1-4Zm2 6v11h12V9H6Zm3 3h6v2H9v-2Z"/></svg></span><span class="nav-label">Archivio</span></button>
+    <button class="nav-btn" data-view="calendar" type="button"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M7 2h2v2h6V2h2v2h3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h3V2Zm13 8H4v10h16V10ZM4 8h16V6H4v2Z"/></svg></span><span class="nav-label">Calendario</span></button>
+    <button class="nav-btn" data-view="history" type="button"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 1-7.1 2.9l1.4 1.4A8 8 0 1 0 12 4V2Zm-1 5h2v5.2l3.4 2-1 1.7-4.4-2.6V7Z"/></svg></span><span class="nav-label">Storico</span></button>
+    <button class="nav-btn" data-view="settings" type="button"><span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m19.4 13 .1-1-.1-1 2-1.5-2-3.4-2.4 1a8 8 0 0 0-1.7-1L15 3.5h-4L10.7 6A8 8 0 0 0 9 7L6.6 6 4.6 9.5 6.6 11l-.1 1 .1 1-2 1.5 2 3.4 2.4-1a8 8 0 0 0 1.7 1l.3 2.6h4l.3-2.6a8 8 0 0 0 1.7-1l2.4 1 2-3.4-2-1.5ZM13 16a4 4 0 1 1 0-8 4 4 0 0 1 0 8Z"/></svg></span><span class="nav-label">Altro</span></button>
   </nav>
 
   <dialog id="therapyDialog">
@@ -385,6 +398,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="app.js"></script>
+  <script src="app.js?v=17"></script>
 </body>
 </html>

@@ -1,20 +1,21 @@
-# Terapie in Orario – v16
+# Terapie in Orario – v17 Restyling grafico
 
-Novità principali:
+Questa versione mantiene la logica della v16 e interviene soprattutto sull'interfaccia.
 
-- Posticipa una dose di 10, 30 o 60 minuti, anche per Telegram.
-- Gestione scorte: unità disponibili, consumo per dose e avviso scorta bassa.
-- Calendario mensile con stato delle giornate.
-- Statistiche organizzative mensili: prese, saltate, non registrate e percentuale di aderenza.
-- Sincronizzazione tra dispositivi tramite Backup TIO2: controllo automatico quando l'app torna in primo piano e pulsante “Sincronizza ora”.
-- Mantiene backup automatico e recupero Telegram della v15.
-- Cache PWA aggiornata a v16.
+## Novità grafiche
+- Home ridisegnata con riepilogo giornaliero, barra di avanzamento e prossima terapia evidenziata.
+- Schede terapia più compatte con immagine/iniziale, badge e menu “•••” per le azioni secondarie.
+- Navigazione inferiore con icone SVG uniformi.
+- Calendario e statistiche ridisegnati, inclusa percentuale aderenza con indicatore circolare.
+- Impostazioni più ordinate: i dati tecnici Telegram sono raccolti in “Configurazione tecnica”.
+- Indicatore Cloud/Locale nell'intestazione.
+- Migliore resa su smartphone piccoli e tablet.
+- Tema scuro automatico quando il dispositivo usa la modalità scura.
+- Cache PWA aggiornata a v17.
 
 ## Aggiornamento
+1. Sostituisci su GitHub i file della webapp con quelli di questa cartella.
+2. Non è necessario modificare il Worker Cloudflare: la logica server è la stessa della v16.
+3. Riapri la webapp. Se necessario, aprila una volta con `?v=17` per forzare il caricamento dei file nuovi.
 
-1. Sostituisci tutti i file della webapp su GitHub.
-2. Sostituisci il Worker Cloudflare con `cloudflare/worker.js` e premi **Deploy**.
-3. Non modificare KV, TELEGRAM_BOT_TOKEN, Chat ID o Cron Trigger.
-4. Apri la PWA una volta e verifica Impostazioni → Sincronizzazione tra dispositivi.
-
-Le statistiche sono soltanto organizzative e non sostituiscono valutazioni mediche o indicazioni terapeutiche.
+La webapp resta un promemoria personale e non sostituisce le indicazioni del medico o del farmacista.
