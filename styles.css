@@ -128,7 +128,7 @@ select { border: 1px solid #cddbd7; border-radius: 12px; background: #fff; color
 .repeat-button { font-weight: 850; }
 .bottom-nav {
   position: fixed; z-index: 30; left: 50%; bottom: 0; transform: translateX(-50%);
-  width: min(760px, 100%); display: grid; grid-template-columns: repeat(5, 1fr);
+  width: min(760px, 100%); display: grid; grid-template-columns: repeat(6, 1fr);
   padding: 8px 8px max(8px, env(safe-area-inset-bottom));
   background: rgba(255,255,255,.96); border-top: 1px solid var(--border); backdrop-filter: blur(14px);
 }
@@ -293,3 +293,45 @@ legend { font-weight: 850; padding: 0 6px; }
 .auto-backup-row p { margin: 4px 0 0; }
 .simple-backup-panel { display: grid; gap: 10px; }
 .simple-backup-panel .wide-button { margin: 0; }
+
+
+/* ===== v16: Posticipa, scorte, calendario e multi-dispositivo ===== */
+.three-cols { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+.stock-chip { background:#e8f5ee; color:#176b5b; border:1px solid #c8e6da; }
+.stock-chip.low { background:#fee2e2; color:#922f2f; border-color:#f2bcbc; }
+.stock-warning { margin:8px 0; padding:8px 10px; border-radius:10px; background:#fff1bd; color:#806000; font-size:.84rem; font-weight:750; }
+.snooze-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
+.snooze-button { border:1px solid #cbdad6; background:#f5f8f7; color:#365f56; border-radius:10px; padding:7px 9px; font-weight:750; font-size:.78rem; }
+.snooze-chip { background:#e1f1fa; color:#275e80; border:1px solid #bdddea; }
+.time-badge small { display:block; font-size:.62rem; font-weight:650; opacity:.75; margin-top:2px; }
+.calendar-toolbar { display:grid; grid-template-columns:auto 1fr auto; gap:10px; align-items:center; margin:14px 0; text-align:center; }
+.calendar-toolbar strong { font-size:1.05rem; text-transform:capitalize; }
+.stats-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin:12px 0 18px; }
+.stat-card { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:13px; box-shadow:var(--shadow); }
+.stat-card strong { display:block; font-size:1.35rem; margin-bottom:3px; }
+.stat-card span { color:var(--muted); font-size:.76rem; }
+.calendar-weekdays, .calendar-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:5px; }
+.calendar-weekdays { margin-bottom:5px; color:var(--muted); font-weight:800; font-size:.72rem; text-align:center; }
+.calendar-day { min-height:74px; background:#fff; border:1px solid var(--border); border-radius:12px; padding:7px; position:relative; }
+.calendar-day.empty { background:transparent; border-color:transparent; box-shadow:none; }
+.calendar-day.today { outline:2px solid var(--primary); }
+.calendar-day .day-number { font-weight:850; font-size:.82rem; }
+.calendar-day .day-count { display:block; margin-top:6px; font-size:.68rem; color:var(--muted); }
+.calendar-day.complete { background:#e7f6f0; border-color:#b8dfd2; }
+.calendar-day.partial { background:#fff0e6; border-color:#f2ceb5; }
+.calendar-day.future { background:#eef7fc; border-color:#c8dfec; }
+.calendar-legend { display:flex; flex-wrap:wrap; gap:12px; margin:8px 0 12px; color:var(--muted); font-size:.76rem; }
+.legend-dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:4px; vertical-align:-1px; background:#ddd; }
+.legend-dot.complete { background:#6fbaa1; } .legend-dot.partial { background:#e49a64; } .legend-dot.future { background:#79b7d8; }
+.sync-card { border-color:#c7ddec; }
+.sync-card .status-pill.syncing { background:#fff1bd; color:#806000; }
+.sync-card .status-pill.success { background:#dff3ed; color:#116050; }
+.sync-card .status-pill.error { background:#fee2e2; color:#922f2f; }
+@media (max-width:640px) {
+  .stats-grid { grid-template-columns:repeat(2,1fr); }
+  .three-cols { grid-template-columns:1fr; }
+  .calendar-day { min-height:60px; padding:5px; }
+  .calendar-day .day-count { font-size:.6rem; }
+  .bottom-nav { overflow-x:auto; grid-template-columns:repeat(6,minmax(58px,1fr)); }
+  .nav-btn { font-size:.58rem; }
+}

@@ -74,6 +74,30 @@
       <div id="archiveList" class="card-list"></div>
     </section>
 
+
+    <section id="view-calendar" class="view" aria-labelledby="calendarTitle">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Andamento</p>
+          <h2 id="calendarTitle">Calendario e statistiche</h2>
+        </div>
+      </div>
+      <div class="calendar-toolbar">
+        <button id="calendarPrevBtn" class="secondary" type="button" aria-label="Mese precedente">‹</button>
+        <strong id="calendarMonthLabel">Mese</strong>
+        <button id="calendarNextBtn" class="secondary" type="button" aria-label="Mese successivo">›</button>
+      </div>
+      <div id="statsGrid" class="stats-grid"></div>
+      <div class="calendar-legend">
+        <span><i class="legend-dot complete"></i> Completato</span>
+        <span><i class="legend-dot partial"></i> Incompleto / saltato</span>
+        <span><i class="legend-dot future"></i> Programmato</span>
+      </div>
+      <div class="calendar-weekdays"><span>Lun</span><span>Mar</span><span>Mer</span><span>Gio</span><span>Ven</span><span>Sab</span><span>Dom</span></div>
+      <div id="calendarGrid" class="calendar-grid"></div>
+      <article id="worstTherapyCard" class="settings-card hidden"></article>
+    </section>
+
     <section id="view-history" class="view" aria-labelledby="historyTitle">
       <div class="section-heading">
         <div>
@@ -134,6 +158,25 @@
           <button id="testTelegramBtn" class="secondary" type="button">Messaggio di prova</button>
         </div>
         <p id="cloudStatus" class="small-note"></p>
+      </article>
+
+
+      <article class="settings-card sync-card">
+        <div class="switch-row">
+          <div>
+            <h3>Sincronizzazione tra dispositivi</h3>
+            <p>Quando usi lo stesso backup TIO2, telefono, tablet e PC possono recuperare automaticamente la versione più recente.</p>
+          </div>
+          <label class="switch">
+            <input id="multiDeviceSyncEnabled" type="checkbox" checked>
+            <span></span>
+          </label>
+        </div>
+        <div class="row-actions">
+          <button id="syncDevicesNowBtn" class="secondary" type="button">Sincronizza ora</button>
+          <span id="multiDeviceSyncStatus" class="status-pill">In attesa</span>
+        </div>
+        <p class="small-note">In caso di modifiche contemporanee viene mantenuta l'ultima versione salvata sul cloud.</p>
       </article>
 
       <article class="settings-card cloud-backup-card">
@@ -211,6 +254,7 @@
     <button class="nav-btn active" data-view="today" type="button"><span>◷</span>Oggi</button>
     <button class="nav-btn" data-view="therapies" type="button"><span>💊</span>Terapie</button>
     <button class="nav-btn" data-view="archive" type="button"><span>🗃️</span>Archivio</button>
+    <button class="nav-btn" data-view="calendar" type="button"><span>▦</span>Calendario</button>
     <button class="nav-btn" data-view="history" type="button"><span>✓</span>Storico</button>
     <button class="nav-btn" data-view="settings" type="button"><span>⚙</span>Impostazioni</button>
   </nav>
@@ -232,6 +276,23 @@
       <label>Dose / indicazione *
         <input id="therapyDose" type="text" required maxlength="80" placeholder="Esempio: 1 compressa">
       </label>
+
+
+      <fieldset>
+        <legend>Scorte</legend>
+        <div class="three-cols">
+          <label>Unità disponibili
+            <input id="stockUnits" type="number" min="0" step="0.5" inputmode="decimal" placeholder="Es. 30">
+          </label>
+          <label>Unità per assunzione
+            <input id="doseUnits" type="number" min="0.1" step="0.5" inputmode="decimal" value="1">
+          </label>
+          <label>Avvisa sotto
+            <input id="lowStockThreshold" type="number" min="0" step="1" inputmode="numeric" value="5">
+          </label>
+        </div>
+        <p class="small-note">Quando registri “Presa”, la scorta viene scalata automaticamente. Lascia “Unità disponibili” vuoto se non vuoi usare la gestione scorte.</p>
+      </fieldset>
 
       <fieldset>
         <legend>Confezione del farmaco</legend>

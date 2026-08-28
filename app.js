@@ -11,6 +11,7 @@ const MEDIA_STORE = "therapy-images";
 const defaultState = {
   therapies: [],
   logs: [],
+  snoozes: [],
   settings: {
     telegramEnabled: false,
     apiBase: "",
@@ -22,7 +23,9 @@ const defaultState = {
     recoveryCode: "",
     backupId: "",
     autoBackupEnabled: true,
-    telegramRecoverySentFor: ""
+    telegramRecoverySentFor: "",
+    multiDeviceSyncEnabled: true,
+    lastDeviceSyncAt: ""
   }
 };
 
@@ -39,6 +42,8 @@ let autoBackupTimer = null;
 let autoBackupInFlight = false;
 let autoBackupDirty = false;
 let autoBackupSuspended = false;
+let calendarCursor = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+let deviceSyncInFlight = false;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -63,9 +68,13 @@ function loadState() {
             ...therapy,
             archived: therapy.archived === true,
             archivedAt: therapy.archivedAt || "",
-            monthInterval: Math.max(1, Number.parseInt(therapy.monthInterval || 1, 10) || 1)
+            monthInterval: Math.max(1, Number.parseInt(therapy.monthInterval || 1, 10) || 1),
+            stockUnits: therapy.stockUnits === "" || therapy.stockUnits == null ? "" : Math.max(0, Number(therapy.stockUnits) || 0),
+            doseUnits: Math.max(0.1, Number(therapy.doseUnits) || 1),
+            lowStockThreshold: Math.max(0, Number(therapy.lowStockThreshold) || 5)
           }))
         : [],
+      snoozes: Array.isArray(parsed.snoozes) ? parsed.snoozes : [],
       settings: { ...defaultState.settings, ...(parsed.settings || {}) }
     };
   } catch {
@@ -341,27 +350,36 @@ function therapyApplies(therapy, date) {
 
 function dosesForDate(date = new Date()) {
   const iso = localDateISO(date);
-  return state.therapies
+  const regular = state.therapies
     .filter((therapy) => therapyApplies(therapy, date))
     .flatMap((therapy) => therapy.times.map((time) => {
       const log = state.logs.find((item) => item.therapyId === therapy.id && item.date === iso && item.time === time);
-      return { therapy, time, log };
-    }))
-    .sort((a, b) => a.time.localeCompare(b.time));
+      const snooze = getSnooze(therapy.id, iso, time);
+      return { therapy, time, originalDate: iso, log, snooze };
+    }));
+
+  const movedHere = (state.snoozes || [])
+    .filter((item) => item.snoozeDate === iso && item.originalDate !== iso)
+    .map((item) => {
+      const therapy = state.therapies.find((t) => t.id === item.therapyId);
+      if (!therapy || therapy.archived || !therapy.active) return null;
+      const log = state.logs.find((entry) => entry.therapyId === item.therapyId && entry.date === item.originalDate && entry.time === item.originalTime);
+      return { therapy, time: item.originalTime, originalDate: item.originalDate, log, snooze: item };
+    })
+    .filter(Boolean);
+
+  return [...regular, ...movedHere].sort((a, b) => doseMoment(a, date) - doseMoment(b, date));
 }
 
 function doseStatus(dose, now = new Date()) {
   if (dose.log?.status === "taken") return { key: "taken", text: "Presa" };
   if (dose.log?.status === "skipped") return { key: "skipped", text: "Saltata" };
-  const today = localDateISO(now);
-  const doseDate = dose.log?.date || today;
-  if (doseDate !== today) return { key: "next", text: "Programmato" };
-  const nowMinutes = now.getHours() * 60 + now.getMinutes();
-  const doseMinutes = timeToMinutes(dose.time);
-  const delta = doseMinutes - nowMinutes;
-  if (delta > 30) return { key: "next", text: `Tra ${Math.floor(delta / 60) ? `${Math.floor(delta / 60)} h ` : ""}${delta % 60} min` };
+  const moment = doseMoment(dose, now);
+  const delta = Math.round((moment.getTime() - now.getTime()) / 60000);
+  if (dose.snooze && delta > 0) return { key: "next", text: `Posticipata · ${doseDisplayTime(dose)}` };
+  if (delta > 30) return { key: "next", text: `Tra ${Math.floor(delta / 60) ? `${Math.floor(delta / 60)} h ` : ""}${Math.abs(delta % 60)} min` };
   if (delta > 0) return { key: "due", text: `Tra ${delta} min` };
-  if (delta >= -30) return { key: "due", text: "Da prendere" };
+  if (delta >= -30) return { key: "due", text: dose.snooze ? "Promemoria posticipato" : "Da prendere" };
   return { key: "late", text: "In ritardo" };
 }
 
@@ -385,6 +403,7 @@ function showView(view) {
   window.scrollTo({ top: 0, behavior: "smooth" });
   if (view === "history") renderHistory();
   if (view === "archive") renderArchive();
+  if (view === "calendar") renderCalendar();
 }
 
 function imageHTML(src, cls = "med-thumb") {
@@ -392,10 +411,128 @@ function imageHTML(src, cls = "med-thumb") {
   return `<img src="${src}" alt="Immagine farmaco" class="${cls}">`;
 }
 
+
+function getSnooze(therapyId, originalDate, originalTime) {
+  return (state.snoozes || []).find((item) =>
+    item.therapyId === therapyId && item.originalDate === originalDate && item.originalTime === originalTime
+  ) || null;
+}
+
+function removeLocalSnooze(therapyId, originalDate, originalTime) {
+  state.snoozes = (state.snoozes || []).filter((item) =>
+    !(item.therapyId === therapyId && item.originalDate === originalDate && item.originalTime === originalTime)
+  );
+}
+
+function doseOriginalDate(dose, fallbackDate = new Date()) {
+  return dose.originalDate || localDateISO(fallbackDate);
+}
+
+function doseDisplayDate(dose, fallbackDate = new Date()) {
+  return dose.snooze?.snoozeDate || doseOriginalDate(dose, fallbackDate);
+}
+
+function doseDisplayTime(dose) {
+  return dose.snooze?.snoozeTime || dose.time;
+}
+
+function doseMoment(dose, fallbackDate = new Date()) {
+  return new Date(`${doseDisplayDate(dose, fallbackDate)}T${doseDisplayTime(dose)}:00`);
+}
+
+function stockEnabled(therapy) {
+  return therapy?.stockUnits !== "" && therapy?.stockUnits != null && Number.isFinite(Number(therapy.stockUnits));
+}
+
+function stockText(therapy) {
+  if (!stockEnabled(therapy)) return "";
+  const value = Math.max(0, Number(therapy.stockUnits) || 0);
+  return Number.isInteger(value) ? String(value) : value.toLocaleString("it-IT", { maximumFractionDigits: 1 });
+}
+
+function isLowStock(therapy) {
+  return stockEnabled(therapy) && Number(therapy.stockUnits) <= Math.max(0, Number(therapy.lowStockThreshold) || 0);
+}
+
+function scheduledDosesForDate(date) {
+  return dosesForDate(date).filter((dose, index, all) => {
+    const key = `${dose.therapy.id}|${doseOriginalDate(dose, date)}|${dose.time}`;
+    return all.findIndex((other) => `${other.therapy.id}|${doseOriginalDate(other, date)}|${other.time}` === key) === index;
+  });
+}
+
+function monthStatistics(cursor = calendarCursor) {
+  const year = cursor.getFullYear();
+  const month = cursor.getMonth();
+  const last = new Date(year, month + 1, 0).getDate();
+  const today = new Date();
+  let taken = 0, skipped = 0, missed = 0, scheduled = 0;
+  const missedByTherapy = new Map();
+  for (let day = 1; day <= last; day += 1) {
+    const date = new Date(year, month, day, 12, 0, 0);
+    const doses = scheduledDosesForDate(date);
+    scheduled += doses.length;
+    if (date > today) continue;
+    for (const dose of doses) {
+      if (dose.log?.status === "taken") taken += 1;
+      else if (dose.log?.status === "skipped") skipped += 1;
+      else if (doseMoment(dose, date) < today) {
+        missed += 1;
+        missedByTherapy.set(dose.therapy.name, (missedByTherapy.get(dose.therapy.name) || 0) + 1);
+      }
+    }
+  }
+  const denominator = taken + skipped + missed;
+  const adherence = denominator ? Math.round((taken / denominator) * 100) : 100;
+  const worst = [...missedByTherapy.entries()].sort((a,b) => b[1]-a[1])[0] || null;
+  return { taken, skipped, missed, scheduled, adherence, worst };
+}
+
+function renderCalendar() {
+  const grid = $("#calendarGrid");
+  if (!grid) return;
+  const year = calendarCursor.getFullYear();
+  const month = calendarCursor.getMonth();
+  const first = new Date(year, month, 1);
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  $("#calendarMonthLabel").textContent = new Intl.DateTimeFormat("it-IT", { month: "long", year: "numeric" }).format(first);
+  const offset = (first.getDay() + 6) % 7;
+  const cells = [];
+  for (let i=0;i<offset;i+=1) cells.push('<div class="calendar-day empty"></div>');
+  const now = new Date();
+  for (let day=1; day<=lastDay; day+=1) {
+    const date = new Date(year, month, day, 12, 0, 0);
+    const iso = localDateISO(date);
+    const doses = scheduledDosesForDate(date);
+    const complete = doses.length && doses.every((d) => d.log?.status === "taken");
+    const problematic = doses.length && date <= now && doses.some((d) => d.log?.status === "skipped" || (!d.log && doseMoment(d,date) < now));
+    const future = doses.length && date > now;
+    const cls = complete ? "complete" : problematic ? "partial" : future ? "future" : "";
+    const todayClass = iso === localDateISO(now) ? " today" : "";
+    const taken = doses.filter((d) => d.log?.status === "taken").length;
+    cells.push(`<div class="calendar-day ${cls}${todayClass}" title="${doses.length} dosi programmate"><span class="day-number">${day}</span>${doses.length ? `<span class="day-count">${taken}/${doses.length} prese</span>` : ""}</div>`);
+  }
+  grid.innerHTML = cells.join("");
+  const stats = monthStatistics(calendarCursor);
+  $("#statsGrid").innerHTML = `
+    <div class="stat-card"><strong>${stats.adherence}%</strong><span>Aderenza</span></div>
+    <div class="stat-card"><strong>${stats.taken}</strong><span>Prese</span></div>
+    <div class="stat-card"><strong>${stats.skipped}</strong><span>Saltate</span></div>
+    <div class="stat-card"><strong>${stats.missed}</strong><span>Non registrate</span></div>`;
+  const worst = $("#worstTherapyCard");
+  if (stats.worst) {
+    worst.classList.remove("hidden");
+    worst.innerHTML = `<h3>Da controllare</h3><p><strong>${escapeHTML(stats.worst[0])}</strong> è la terapia con più assunzioni non registrate nel mese (${stats.worst[1]}). È una statistica organizzativa, non una valutazione medica.</p>`;
+  } else {
+    worst.classList.add("hidden");
+  }
+}
+
 function renderAll() {
   renderToday();
   renderTherapies();
   renderArchive();
+  renderCalendar();
   renderHistory();
   renderSettings();
 }
@@ -406,55 +543,47 @@ function renderToday() {
   const completed = doses.filter((dose) => ["taken", "skipped"].includes(dose.log?.status)).length;
   $("#todayDate").textContent = formatLongDate(now);
   $("#progressValue").textContent = `${completed}/${doses.length}`;
-  const next = doses.find((dose) => !dose.log && timeToMinutes(dose.time) >= now.getHours() * 60 + now.getMinutes()) || doses.find((dose) => !dose.log);
-  $("#nextDoseText").textContent = next ? `Prossima: ${next.therapy.name} alle ${next.time}` : doses.length ? "Programma completato per oggi." : "Aggiungi la prima terapia per iniziare.";
+  const next = doses.filter((dose) => !dose.log).sort((a,b) => doseMoment(a,now)-doseMoment(b,now))[0];
+  $("#nextDoseText").textContent = next ? `Prossima: ${next.therapy.name} alle ${doseDisplayTime(next)}` : doses.length ? "Programma completato per oggi." : "Aggiungi la prima terapia per iniziare.";
   $("#todayEmpty").classList.toggle("hidden", doses.length > 0);
 
   const duplicateCounts = new Map();
   doses.forEach((dose) => {
-    const key = todayDoseDuplicateKey(dose);
+    const key = todayDoseDuplicateKey({ ...dose, time: doseDisplayTime(dose) });
     duplicateCounts.set(key, (duplicateCounts.get(key) || 0) + 1);
   });
   const alreadyRendered = new Set();
-
   const list = $("#todayList");
   list.innerHTML = doses.map((dose) => {
     const status = doseStatus(dose, now);
-    const duplicateKey = todayDoseDuplicateKey(dose);
+    const displayTime = doseDisplayTime(dose);
+    const originalDate = doseOriginalDate(dose, now);
+    const duplicateKey = todayDoseDuplicateKey({ ...dose, time: displayTime });
     const isDuplicate = (duplicateCounts.get(duplicateKey) || 0) > 1 && alreadyRendered.has(duplicateKey);
     alreadyRendered.add(duplicateKey);
-
+    const stock = stockText(dose.therapy);
     return `
       <article class="dose-card ${isDuplicate ? "duplicate-dose-card" : ""}">
         <div>
-          <div class="time-badge">${escapeHTML(dose.time)}</div>
+          <div class="time-badge">${escapeHTML(displayTime)}${dose.snooze ? `<small>era ${escapeHTML(dose.time)}</small>` : ""}</div>
           ${therapyImageUrls.get(dose.therapy.id) ? imageHTML(therapyImageUrls.get(dose.therapy.id), "med-thumb small") : ""}
         </div>
         <div class="dose-main">
-          <div class="therapy-card-top">
-            <div>
-              <h3>${escapeHTML(dose.therapy.name)}</h3>
-              <p class="dose-meta">${escapeHTML(dose.therapy.dose)}</p>
-            </div>
-            <span class="status-line status-${status.key}">${escapeHTML(status.text)}</span>
+          <div class="therapy-card-top"><div><h3>${escapeHTML(dose.therapy.name)}</h3><p class="dose-meta">${escapeHTML(dose.therapy.dose)}</p></div><span class="status-line status-${status.key}">${escapeHTML(status.text)}</span></div>
+          <div class="therapy-times">
+            ${dose.snooze ? `<span class="chip snooze-chip">⏰ Posticipata a ${escapeHTML(dose.snooze.snoozeDate === originalDate ? displayTime : `${dose.snooze.snoozeDate} ${displayTime}`)}</span>` : ""}
+            ${stock ? `<span class="chip stock-chip ${isLowStock(dose.therapy) ? "low" : ""}">Scorta: ${escapeHTML(stock)}</span>` : ""}
+            ${dose.therapy.barcode ? `<span class="chip code-chip">Codice: ${escapeHTML(dose.therapy.barcode)}</span>` : ""}
           </div>
-          ${dose.therapy.barcode ? `<div class="therapy-times"><span class="chip code-chip">Codice: ${escapeHTML(dose.therapy.barcode)}</span></div>` : ""}
+          ${isLowStock(dose.therapy) ? `<div class="stock-warning">⚠️ Scorta bassa: restano ${escapeHTML(stock)} unità.</div>` : ""}
           ${dose.therapy.notes ? `<p class="dose-note">${escapeHTML(dose.therapy.notes)}</p>` : ""}
-          ${isDuplicate ? `
-            <div class="duplicate-warning">
-              <strong>⚠️ Possibile duplicato</strong>
-              <span>Questa terapia è già presente oggi allo stesso orario.</span>
-              <button class="action-remove-duplicate" data-action="remove-duplicate-therapy" data-id="${dose.therapy.id}" type="button">Rimuovi questa copia</button>
-            </div>
-          ` : ""}
+          ${isDuplicate ? `<div class="duplicate-warning"><strong>⚠️ Possibile duplicato</strong><span>Questa terapia è già presente oggi allo stesso orario.</span><button class="action-remove-duplicate" data-action="remove-duplicate-therapy" data-id="${dose.therapy.id}" type="button">Rimuovi questa copia</button></div>` : ""}
           <div class="dose-actions">
-            ${dose.log ? `
-              <button class="action-reset" data-action="reset-dose" data-id="${dose.therapy.id}" data-time="${dose.time}" type="button">Annulla registrazione</button>
-            ` : `
-              <button class="action-taken" data-action="mark-taken" data-id="${dose.therapy.id}" data-time="${dose.time}" type="button">✓ Presa</button>
-              <button class="action-skipped" data-action="mark-skipped" data-id="${dose.therapy.id}" data-time="${dose.time}" type="button">Saltata</button>
-            `}
+            ${dose.log ? `<button class="action-reset" data-action="reset-dose" data-id="${dose.therapy.id}" data-time="${dose.time}" data-date="${originalDate}" type="button">Annulla registrazione</button>` : `
+              <button class="action-taken" data-action="mark-taken" data-id="${dose.therapy.id}" data-time="${dose.time}" data-date="${originalDate}" type="button">✓ Presa</button>
+              <button class="action-skipped" data-action="mark-skipped" data-id="${dose.therapy.id}" data-time="${dose.time}" data-date="${originalDate}" type="button">Saltata</button>`}
           </div>
+          ${!dose.log ? `<div class="snooze-actions"><span class="small-note">Posticipa:</span><button class="snooze-button" data-action="snooze-dose" data-minutes="10" data-id="${dose.therapy.id}" data-time="${dose.time}" data-date="${originalDate}" type="button">+10 min</button><button class="snooze-button" data-action="snooze-dose" data-minutes="30" data-id="${dose.therapy.id}" data-time="${dose.time}" data-date="${originalDate}" type="button">+30 min</button><button class="snooze-button" data-action="snooze-dose" data-minutes="60" data-id="${dose.therapy.id}" data-time="${dose.time}" data-date="${originalDate}" type="button">+1 ora</button></div>` : ""}
         </div>
       </article>`;
   }).join("");
@@ -482,6 +611,8 @@ function therapyCardHtml(therapy, { archived = false } = {}) {
           <p class="small-note">${therapy.days.length === 7 ? "Tutti i giorni" : therapy.days.map((d) => dayNames[d]).join(", ")}</p>
           ${monthIntervalValue(therapy) === 2 ? `<div><span class="chip recurrence-chip">Mesi alterni</span></div>` : ""}
           ${therapy.barcode ? `<div><span class="chip code-chip">Codice a barre: ${escapeHTML(therapy.barcode)}</span></div>` : ""}
+          ${stockEnabled(therapy) ? `<div><span class="chip stock-chip ${isLowStock(therapy) ? "low" : ""}">Scorta: ${escapeHTML(stockText(therapy))} · ${escapeHTML(String(therapy.doseUnits || 1))}/dose</span></div>` : ""}
+          ${isLowStock(therapy) ? `<div class="stock-warning">⚠️ Scorta bassa: valuta il rifornimento.</div>` : ""}
           ${therapy.notes ? `<p>${escapeHTML(therapy.notes)}</p>` : ""}
           ${archivedDate ? `<p class="small-note">Archiviata il ${escapeHTML(archivedDate)}</p>` : ""}
         </div>
@@ -559,6 +690,11 @@ function renderHistory() {
 function renderSettings() {
   const s = state.settings;
   $("#telegramEnabled").checked = !!s.telegramEnabled;
+  if ($("#multiDeviceSyncEnabled")) $("#multiDeviceSyncEnabled").checked = s.multiDeviceSyncEnabled !== false;
+  if ($("#multiDeviceSyncStatus") && s.lastDeviceSyncAt) {
+    $("#multiDeviceSyncStatus").textContent = `Aggiornata ${new Date(s.lastDeviceSyncAt).toLocaleTimeString("it-IT", {hour:"2-digit", minute:"2-digit"})}`;
+    $("#multiDeviceSyncStatus").className = "status-pill success";
+  }
   if ($("#autoBackupEnabled")) $("#autoBackupEnabled").checked = s.autoBackupEnabled !== false;
   $("#apiBase").value = s.apiBase || "";
   $("#appKey").value = s.appKey || "";
@@ -622,6 +758,9 @@ async function openTherapyDialog(id = "") {
   $("#dialogTitle").textContent = therapy ? "Modifica terapia" : "Nuova terapia";
   $("#therapyName").value = therapy?.name || "";
   $("#therapyDose").value = therapy?.dose || "";
+  $("#stockUnits").value = stockEnabled(therapy) ? therapy.stockUnits : "";
+  $("#doseUnits").value = therapy?.doseUnits || 1;
+  $("#lowStockThreshold").value = therapy?.lowStockThreshold ?? 5;
   $("#therapyBarcode").value = therapy?.barcode || "";
   $("#startDate").value = therapy?.startDate || localDateISO();
   $("#endDate").value = therapy?.endDate || "";
@@ -653,6 +792,9 @@ async function openRepeatTherapyDialog(id) {
   $("#dialogTitle").textContent = `Ripeti: ${therapy.name}`;
   $("#therapyName").value = therapy.name || "";
   $("#therapyDose").value = therapy.dose || "";
+  $("#stockUnits").value = stockEnabled(therapy) ? therapy.stockUnits : "";
+  $("#doseUnits").value = therapy.doseUnits || 1;
+  $("#lowStockThreshold").value = therapy.lowStockThreshold ?? 5;
   $("#therapyBarcode").value = therapy.barcode || "";
   $("#therapyNotes").value = therapy.notes || "";
   $("#monthInterval").value = String(monthIntervalValue(therapy));
@@ -747,6 +889,9 @@ async function saveTherapy(event) {
     name: $("#therapyName").value.trim(),
     dose: $("#therapyDose").value.trim(),
     barcode: $("#therapyBarcode").value.trim(),
+    stockUnits: $("#stockUnits").value === "" ? "" : Math.max(0, Number($("#stockUnits").value) || 0),
+    doseUnits: Math.max(0.1, Number($("#doseUnits").value) || 1),
+    lowStockThreshold: Math.max(0, Number($("#lowStockThreshold").value) || 0),
     hasImage: existing?.hasImage || therapyImageUrls.has(therapyId),
     days,
     times,
@@ -794,14 +939,8 @@ async function saveTherapy(event) {
 }
 
 
-function doseSyncPayload(therapyId, time, status, date = localDateISO()) {
-  return {
-    appKey: state.settings.appKey.trim(),
-    therapyId,
-    date,
-    time,
-    status
-  };
+function doseSyncPayload(therapyId, time, status, date = localDateISO(), extra = {}) {
+  return { appKey: state.settings.appKey.trim(), therapyId, date, time, status, ...extra };
 }
 
 function readPendingDoseSync() {
@@ -817,10 +956,10 @@ function writePendingDoseSync(queue) {
   localStorage.setItem(PENDING_DOSE_SYNC_KEY, JSON.stringify(queue));
 }
 
-function queueDoseStatusSync(therapyId, time, status, date = localDateISO()) {
+function queueDoseStatusSync(therapyId, time, status, date = localDateISO(), extra = {}) {
   if (!state.settings.telegramEnabled) return;
 
-  const payload = doseSyncPayload(therapyId, time, status, date);
+  const payload = doseSyncPayload(therapyId, time, status, date, extra);
   if (!payload.appKey || payload.appKey.length < 8 || !state.settings.apiBase) return;
 
   const key = `${date}:${therapyId}:${time}`;
@@ -886,65 +1025,60 @@ function updateLocalNotificationMemory(therapyId, time, completed, date = localD
 
 async function closeVisibleDoseNotification(therapyId, time, date = localDateISO()) {
   if (!("serviceWorker" in navigator)) return;
-
   try {
     const registration = await navigator.serviceWorker.ready;
-    const tag = `${date}:${therapyId}:${time}`;
-    const notifications = await registration.getNotifications({ tag });
-    notifications.forEach((notification) => notification.close());
-  } catch (error) {
-    console.warn("Impossibile chiudere la notifica locale", error);
-  }
+    const prefix = `${date}:${therapyId}:${time}`;
+    const notifications = await registration.getNotifications();
+    notifications.filter((notification) => String(notification.tag || "").startsWith(prefix)).forEach((notification) => notification.close());
+  } catch (error) { console.warn("Impossibile chiudere la notifica locale", error); }
 }
 
-function markDose(therapyId, time, status) {
-  const date = localDateISO();
-
-  state.logs = state.logs.filter(
-    (item) => !(item.therapyId === therapyId && item.date === date && item.time === time)
-  );
-
+function markDose(therapyId, time, status, date = localDateISO()) {
+  const previous = state.logs.find((item) => item.therapyId === therapyId && item.date === date && item.time === time);
   const therapy = state.therapies.find((item) => item.id === therapyId);
-
-  state.logs.push({
-    id: uid(),
-    therapyId,
-    therapyName: therapy?.name || "",
-    date,
-    time,
-    status,
-    timestamp: new Date().toISOString()
-  });
-
+  if (previous?.status !== "taken" && status === "taken" && therapy && stockEnabled(therapy)) {
+    therapy.stockUnits = Math.max(0, Number(therapy.stockUnits) - Math.max(0.1, Number(therapy.doseUnits) || 1));
+  } else if (previous?.status === "taken" && status !== "taken" && therapy && stockEnabled(therapy)) {
+    therapy.stockUnits = Number(therapy.stockUnits) + Math.max(0.1, Number(therapy.doseUnits) || 1);
+  }
+  state.logs = state.logs.filter((item) => !(item.therapyId === therapyId && item.date === date && item.time === time));
+  state.logs.push({ id: uid(), therapyId, therapyName: therapy?.name || "", date, time, status, timestamp: new Date().toISOString() });
+  removeLocalSnooze(therapyId, date, time);
   saveState({ sync: false });
-
-  // Impedisce notifiche locali successive e chiude quella eventualmente già visibile.
   updateLocalNotificationMemory(therapyId, time, true, date);
   closeVisibleDoseNotification(therapyId, time, date);
-
-  // Comunica subito a Cloudflare che la dose è già stata gestita.
-  // In questo modo il Cron Telegram non invia il promemoria più tardi.
   queueDoseStatusSync(therapyId, time, status, date);
-
-  showToast(status === "taken"
-    ? "Assunzione registrata e promemoria disattivato."
-    : "Dose segnata come saltata e promemoria disattivato.");
+  showToast(status === "taken" ? "Assunzione registrata e scorta aggiornata." : "Dose segnata come saltata e promemoria disattivato.");
 }
 
-function resetDose(therapyId, time) {
-  const date = localDateISO();
-
-  state.logs = state.logs.filter(
-    (item) => !(item.therapyId === therapyId && item.date === date && item.time === time)
-  );
-
+function resetDose(therapyId, time, date = localDateISO()) {
+  const previous = state.logs.find((item) => item.therapyId === therapyId && item.date === date && item.time === time);
+  const therapy = state.therapies.find((item) => item.id === therapyId);
+  if (previous?.status === "taken" && therapy && stockEnabled(therapy)) {
+    therapy.stockUnits = Number(therapy.stockUnits) + Math.max(0.1, Number(therapy.doseUnits) || 1);
+  }
+  state.logs = state.logs.filter((item) => !(item.therapyId === therapyId && item.date === date && item.time === time));
+  removeLocalSnooze(therapyId, date, time);
   saveState({ sync: false });
-
-  // Consente nuovamente il promemoria locale e rimuove il blocco sul Worker.
   updateLocalNotificationMemory(therapyId, time, false, date);
   queueDoseStatusSync(therapyId, time, "reset", date);
-
   showToast("Registrazione annullata. Il promemoria può essere inviato di nuovo.");
+}
+
+function snoozeDose(therapyId, originalTime, minutes, originalDate = localDateISO()) {
+  const base = new Date(`${originalDate}T${originalTime}:00`);
+  const now = new Date();
+  const anchor = base > now ? base : now;
+  const target = new Date(anchor.getTime() + Math.max(1, Number(minutes) || 10) * 60000);
+  const snoozeDate = localDateISO(target);
+  const snoozeTime = `${String(target.getHours()).padStart(2,"0")}:${String(target.getMinutes()).padStart(2,"0")}`;
+  removeLocalSnooze(therapyId, originalDate, originalTime);
+  state.snoozes.push({ therapyId, originalDate, originalTime, snoozeDate, snoozeTime, createdAt: new Date().toISOString() });
+  saveState({ sync: false });
+  updateLocalNotificationMemory(therapyId, originalTime, true, originalDate);
+  closeVisibleDoseNotification(therapyId, originalTime, originalDate);
+  queueDoseStatusSync(therapyId, originalTime, "snoozed", originalDate, { snoozeDate, snoozeTime });
+  showToast(`Promemoria posticipato alle ${snoozeTime}.`);
 }
 
 async function requestNotifications() {
@@ -964,16 +1098,19 @@ async function showDeviceNotification(title, options) {
 function checkDueNotifications() {
   if (!("Notification" in window) || Notification.permission !== "granted") return;
   const now = new Date();
-  const today = localDateISO(now);
-  const minute = now.getHours() * 60 + now.getMinutes();
   const notified = JSON.parse(localStorage.getItem(NOTIFIED_KEY) || "{}");
   dosesForDate(now).forEach((dose) => {
-    const key = `${today}:${dose.therapy.id}:${dose.time}`;
-    const dueMinute = timeToMinutes(dose.time);
-    if (!dose.log && minute >= dueMinute && minute <= dueMinute + 2 && !notified[key]) {
+    if (dose.log) return;
+    const originalDate = doseOriginalDate(dose, now);
+    const effectiveDate = doseDisplayDate(dose, now);
+    if (effectiveDate !== localDateISO(now)) return;
+    const effectiveTime = doseDisplayTime(dose);
+    const key = `${originalDate}:${dose.therapy.id}:${dose.time}:at:${effectiveDate}:${effectiveTime}`;
+    const delta = Math.round((doseMoment(dose, now) - now) / 60000);
+    if (delta <= 0 && delta >= -2 && !notified[key]) {
       notified[key] = new Date().toISOString();
       showDeviceNotification(`È ora di ${dose.therapy.name}`, {
-        body: `${dose.therapy.dose}${dose.therapy.notes ? ` · ${dose.therapy.notes}` : ""}`,
+        body: `${dose.therapy.dose}${dose.snooze ? " · promemoria posticipato" : ""}${dose.therapy.notes ? ` · ${dose.therapy.notes}` : ""}`,
         icon: "icon.svg", badge: "icon.svg", tag: key, renotify: true, data: { url: location.href }
       }).catch(console.error);
     }
@@ -1046,7 +1183,9 @@ function readSettingsForm() {
     recoveryCode: state.settings.recoveryCode || "",
     backupId: state.settings.backupId || "",
     autoBackupEnabled: $("#autoBackupEnabled") ? $("#autoBackupEnabled").checked : state.settings.autoBackupEnabled !== false,
-    telegramRecoverySentFor: state.settings.telegramRecoverySentFor || ""
+    telegramRecoverySentFor: state.settings.telegramRecoverySentFor || "",
+    multiDeviceSyncEnabled: $("#multiDeviceSyncEnabled") ? $("#multiDeviceSyncEnabled").checked : state.settings.multiDeviceSyncEnabled !== false,
+    lastDeviceSyncAt: state.settings.lastDeviceSyncAt || ""
   };
 }
 
@@ -1529,6 +1668,60 @@ async function performOnlineRestore(credentials) {
 }
 
 
+
+function setDeviceSyncStatus(text, type = "") {
+  const el = $("#multiDeviceSyncStatus");
+  if (!el) return;
+  el.textContent = text;
+  el.className = `status-pill${type ? ` ${type}` : ""}`;
+}
+
+async function fetchBackupMetadata(credentials) {
+  if (credentials.version !== 2) return null;
+  const response = await fetch(`${credentials.apiBase}/backup2?backupId=${encodeURIComponent(credentials.backupId)}&meta=1&_=${Date.now()}`, { cache: "no-store" });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || `Errore sincronizzazione ${response.status}`);
+  return result;
+}
+
+async function maybeSyncFromCloud(force = false) {
+  if (deviceSyncInFlight || state.settings.multiDeviceSyncEnabled === false || autoBackupSuspended) return false;
+  const code = state.settings.recoveryCode || "";
+  if (!code) return false;
+  let credentials;
+  try { credentials = decodeRecoveryCode(code); } catch { return false; }
+  if (credentials.version !== 2) return false;
+  if (!force && (autoBackupDirty || autoBackupInFlight)) return false;
+  deviceSyncInFlight = true;
+  setDeviceSyncStatus("Controllo…", "syncing");
+  try {
+    const meta = await fetchBackupMetadata(credentials);
+    const remoteTime = new Date(meta.updatedAt || 0).getTime();
+    const localTime = new Date(state.settings.cloudBackupLast || 0).getTime();
+    if (force || remoteTime > localTime + 1000) {
+      autoBackupSuspended = true;
+      await performOnlineRestore(credentials);
+      autoBackupSuspended = false;
+      state.settings.lastDeviceSyncAt = new Date().toISOString();
+      writeStateToLocalStorage();
+      renderAll();
+      setDeviceSyncStatus("Sincronizzata", "success");
+      if (force) showToast("Dati aggiornati dal cloud.");
+      return true;
+    }
+    state.settings.lastDeviceSyncAt = new Date().toISOString();
+    writeStateToLocalStorage();
+    setDeviceSyncStatus("Già aggiornata", "success");
+    if (force) showToast("Questo dispositivo è già aggiornato.");
+    return false;
+  } catch (error) {
+    autoBackupSuspended = false;
+    setDeviceSyncStatus("Errore", "error");
+    if (force) showToast(error?.message || "Sincronizzazione non riuscita.");
+    return false;
+  } finally { deviceSyncInFlight = false; }
+}
+
 function canAutoBackup() {
   if (autoBackupSuspended || state.settings.autoBackupEnabled === false) return false;
   const apiBase = normalizeApiBase(state.settings.apiBase || "");
@@ -2002,14 +2195,17 @@ function bindEvents() {
     $("#archiveSearch").value = "";
     renderArchive();
   });
+  $("#calendarPrevBtn")?.addEventListener("click", () => { calendarCursor = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() - 1, 1); renderCalendar(); });
+  $("#calendarNextBtn")?.addEventListener("click", () => { calendarCursor = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() + 1, 1); renderCalendar(); });
 
   document.addEventListener("click", async (event) => {
     const button = event.target.closest("[data-action]");
     if (!button) return;
-    const { action, id, time } = button.dataset;
-    if (action === "mark-taken") markDose(id, time, "taken");
-    if (action === "mark-skipped") markDose(id, time, "skipped");
-    if (action === "reset-dose") resetDose(id, time);
+    const { action, id, time, date, minutes } = button.dataset;
+    if (action === "mark-taken") markDose(id, time, "taken", date || localDateISO());
+    if (action === "mark-skipped") markDose(id, time, "skipped", date || localDateISO());
+    if (action === "reset-dose") resetDose(id, time, date || localDateISO());
+    if (action === "snooze-dose") snoozeDose(id, time, Number(minutes) || 10, date || localDateISO());
     if (action === "edit-therapy") openTherapyDialog(id);
     if (action === "repeat-therapy") openRepeatTherapyDialog(id);
     if (action === "remove-duplicate-therapy") {
@@ -2081,6 +2277,14 @@ function bindEvents() {
     writeStateToLocalStorage();
     if (event.target.checked) scheduleAutoBackup(500);
   });
+  $("#multiDeviceSyncEnabled")?.addEventListener("change", (event) => {
+    state.settings.multiDeviceSyncEnabled = event.target.checked;
+    writeStateToLocalStorage();
+    if (event.target.checked) maybeSyncFromCloud(false);
+  });
+  $("#syncDevicesNowBtn")?.addEventListener("click", () => maybeSyncFromCloud(true));
+  window.addEventListener("online", () => maybeSyncFromCloud(false));
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") maybeSyncFromCloud(false); });
   $("#copyRecoveryCodeBtn").addEventListener("click", copyRecoveryCode);
   $("#shareRecoveryCodeBtn").addEventListener("click", shareRecoveryCode);
   $("#restoreWithCodeBtn").addEventListener("click", restoreWithRecoveryCode);
@@ -2131,9 +2335,12 @@ async function init() {
 
   setInterval(() => {
     renderToday();
+    renderCalendar();
     checkDueNotifications();
     flushDoseStatusSync().catch(console.warn);
   }, 30000);
+  setTimeout(() => maybeSyncFromCloud(false), 2500);
+  setInterval(() => maybeSyncFromCloud(false), 120000);
 }
 
 init();

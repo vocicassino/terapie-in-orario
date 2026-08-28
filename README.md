@@ -1,20 +1,20 @@
-# Terapie in Orario – v15 Backup automatico + recupero Telegram
+# Terapie in Orario – v16
 
-Novità:
+Novità principali:
 
-- Backup automatico dopo modifiche, nuove terapie e registrazioni Presa/Saltata.
-- Il codice TIO2 resta stabile e viene usato dietro le quinte.
-- Dopo il primo backup il link di recupero viene inviato automaticamente al bot Telegram.
-- Pulsante “Invia link di recupero su Telegram” per reinviarlo quando vuoi.
-- Dopo un reset del telefono: reinstalla Telegram, apri il messaggio del bot, premi “Ripristina Terapie in Orario” e conferma.
-- Il codice manuale resta nelle opzioni avanzate come recupero di emergenza.
+- Posticipa una dose di 10, 30 o 60 minuti, anche per Telegram.
+- Gestione scorte: unità disponibili, consumo per dose e avviso scorta bassa.
+- Calendario mensile con stato delle giornate.
+- Statistiche organizzative mensili: prese, saltate, non registrate e percentuale di aderenza.
+- Sincronizzazione tra dispositivi tramite Backup TIO2: controllo automatico quando l'app torna in primo piano e pulsante “Sincronizza ora”.
+- Mantiene backup automatico e recupero Telegram della v15.
+- Cache PWA aggiornata a v16.
 
 ## Aggiornamento
 
-1. Sostituisci su GitHub i file della webapp.
-2. Sostituisci il codice del Worker con `cloudflare/worker.js` e premi Deploy.
-3. Non cambiare KV, token Telegram, Chat ID o Cron.
-4. Apri la webapp, vai in Impostazioni e premi una volta “Backup adesso”.
-5. Verifica che il bot Telegram riceva il messaggio con il pulsante di ripristino.
+1. Sostituisci tutti i file della webapp su GitHub.
+2. Sostituisci il Worker Cloudflare con `cloudflare/worker.js` e premi **Deploy**.
+3. Non modificare KV, TELEGRAM_BOT_TOKEN, Chat ID o Cron Trigger.
+4. Apri la PWA una volta e verifica Impostazioni → Sincronizzazione tra dispositivi.
 
-Il link Telegram contiene una credenziale di recupero: proteggi l’account Telegram con PIN/verifica in due passaggi.
+Le statistiche sono soltanto organizzative e non sostituiscono valutazioni mediche o indicazioni terapeutiche.
