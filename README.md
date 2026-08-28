@@ -53,3 +53,20 @@ Modifiche:
 - cache PWA v20.
 
 Per la correzione completa bisogna aggiornare sia i file GitHub sia `cloudflare/worker.js` e fare Deploy.
+
+
+## v21 – promemoria Telegram quasi all'orario esatto
+
+- Cron Cloudflare consigliato: `* * * * *` (ogni minuto).
+- Finestra di recupero Worker: 3 minuti, con deduplicazione.
+- Diagnostica Telegram segnala il Cron come anomalo se non viene eseguito da oltre 5 minuti.
+- Cache PWA aggiornata a v21.
+
+### IMPORTANTE
+Il Cron Trigger non può essere cambiato dal codice del Worker. In Cloudflare devi aprire:
+Worker > Triggers > Cron Triggers
+
+e sostituire l'espressione precedente con:
+
+`* * * * *`
+

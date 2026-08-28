@@ -1277,9 +1277,9 @@ async function checkAndRepairTelegram({ sendTest = false, showMessage = true } =
     }
 
     const cronAge = Number(health.cronAgeMinutes);
-    if (!health.lastCronAt || !Number.isFinite(cronAge) || cronAge > 35) {
+    if (!health.lastCronAt || !Number.isFinite(cronAge) || cronAge > 5) {
       setTelegramHealthStatus("Cron da controllare", "warning", health.lastCronAt
-        ? `Ultimo controllo automatico ${Math.round(cronAge)} minuti fa. Verifica il Cron Trigger Cloudflare.`
+        ? `Ultimo controllo automatico ${Math.round(cronAge)} minuti fa. Il Cron dovrebbe essere impostato ogni minuto.`
         : "Il Worker non registra ancora esecuzioni del Cron Trigger. Verifica il Cron su Cloudflare.");
       if (showMessage) showToast("Telegram collegato, ma il Cron Cloudflare va controllato.");
       return false;
