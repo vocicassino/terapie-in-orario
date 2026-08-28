@@ -19,3 +19,10 @@ Questa versione mantiene la logica della v16 e interviene soprattutto sull'inter
 3. Riapri la webapp. Se necessario, aprila una volta con `?v=17` per forzare il caricamento dei file nuovi.
 
 La webapp resta un promemoria personale e non sostituisce le indicazioni del medico o del farmacista.
+
+
+## Aggiornamento v18
+
+- Corretto il menu in basso su smartphone piccoli.
+- Le scritte non si accavallano più.
+- Su schermi stretti restano visibili sempre le icone e l'etichetta della sezione attiva.
