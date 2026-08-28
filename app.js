@@ -1196,7 +1196,7 @@ async function fetchTelegramHealth() {
   const apiBase = normalizeApiBase(state.settings.apiBase || "");
   const response = await fetch(`${apiBase}/telegram-health?_=${Date.now()}`, {
     method: "POST",
-    headers: { "content-type": "application/json", "cache-control": "no-store" },
+    headers: { "content-type": "application/json" },
     body: JSON.stringify({
       appKey: String(state.settings.appKey || "").trim(),
       chatId: String(state.settings.chatId || "").trim()
@@ -1251,6 +1251,9 @@ async function checkAndRepairTelegram({ sendTest = false, showMessage = true } =
       if (error?.status === 404) {
         await ensureTelegramProfile({ showMessage: false });
         throw new Error("Worker Cloudflare da aggiornare alla v19 per la diagnostica Telegram.");
+      }
+      if (error instanceof TypeError && /fetch/i.test(String(error.message || ""))) {
+        throw new Error("Connessione al Worker bloccata dal browser (CORS/rete). Aggiorna il Worker alla v20 e riprova.");
       }
       throw error;
     }

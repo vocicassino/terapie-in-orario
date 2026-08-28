@@ -39,3 +39,17 @@ La webapp resta un promemoria personale e non sostituisce le indicazioni del med
 
 ### Aggiornamento obbligatorio
 Per questa versione va aggiornato anche `cloudflare/worker.js` su Cloudflare e va mantenuto il Cron Trigger consigliato `*/15 * * * *`.
+
+
+## v20 – Correzione diagnostica Telegram
+
+Corretto l'errore `Failed to fetch` del pulsante **Verifica e ripara Telegram**.
+La causa era il preflight CORS: la webapp inviava anche l'header `cache-control`, mentre il Worker autorizzava soltanto `content-type`.
+
+Modifiche:
+- rimossa dalla richiesta diagnostica l'intestazione non necessaria `cache-control`;
+- il Worker ora accetta anche `cache-control` nelle richieste CORS;
+- messaggio di errore più chiaro se la comunicazione viene bloccata dal browser;
+- cache PWA v20.
+
+Per la correzione completa bisogna aggiornare sia i file GitHub sia `cloudflare/worker.js` e fare Deploy.
