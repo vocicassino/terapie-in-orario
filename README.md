@@ -1,14 +1,20 @@
-# Terapie in Orario - Fix ripristino backup
+# Terapie in Orario – v15 Backup automatico + recupero Telegram
 
-Questa versione mantiene tutte le funzioni precedenti (notifiche Presa/Saltata, Ripeti, mesi alterni e controllo duplicati) e rende il ripristino cloud più robusto.
+Novità:
 
-Correzioni:
-- verifica automatica del Worker Cloudflare prima del ripristino;
-- ritenta automaticamente il download del backup se Cloudflare KV non lo rende subito disponibile;
-- accetta sia il codice `TIO1...`, sia il link di condivisione completo, sia un payload compatibile senza prefisso;
-- non sovrascrive permanentemente le impostazioni se il ripristino fallisce;
-- mostra il motivo reale dell'errore nella sezione Backup;
-- dopo ogni nuovo backup verifica che il file sia realmente recuperabile;
-- cache PWA aggiornata a v13.
+- Backup automatico dopo modifiche, nuove terapie e registrazioni Presa/Saltata.
+- Il codice TIO2 resta stabile e viene usato dietro le quinte.
+- Dopo il primo backup il link di recupero viene inviato automaticamente al bot Telegram.
+- Pulsante “Invia link di recupero su Telegram” per reinviarlo quando vuoi.
+- Dopo un reset del telefono: reinstalla Telegram, apri il messaggio del bot, premi “Ripristina Terapie in Orario” e conferma.
+- Il codice manuale resta nelle opzioni avanzate come recupero di emergenza.
 
-Per questa correzione non è necessario cambiare il Worker se quello pubblicato espone già `/backup` e `/check` con `backupSupported: true`.
+## Aggiornamento
+
+1. Sostituisci su GitHub i file della webapp.
+2. Sostituisci il codice del Worker con `cloudflare/worker.js` e premi Deploy.
+3. Non cambiare KV, token Telegram, Chat ID o Cron.
+4. Apri la webapp, vai in Impostazioni e premi una volta “Backup adesso”.
+5. Verifica che il bot Telegram riceva il messaggio con il pulsante di ripristino.
+
+Il link Telegram contiene una credenziale di recupero: proteggi l’account Telegram con PIN/verifica in due passaggi.

@@ -19,7 +19,10 @@ const defaultState = {
     timezone: "Europe/Rome",
     cloudBackupLast: "",
     cloudBackupBytes: 0,
-    recoveryCode: ""
+    recoveryCode: "",
+    backupId: "",
+    autoBackupEnabled: true,
+    telegramRecoverySentFor: ""
   }
 };
 
@@ -32,6 +35,10 @@ const therapyImageUrls = new Map();
 let scannerStream = null;
 let scannerTimer = null;
 let barcodeDetector = null;
+let autoBackupTimer = null;
+let autoBackupInFlight = false;
+let autoBackupDirty = false;
+let autoBackupSuspended = false;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -118,6 +125,7 @@ function saveState({ sync = true } = {}) {
   if (sync && state.settings.telegramEnabled) {
     syncCloud(false).catch(console.error);
   }
+  scheduleAutoBackup();
   return true;
 }
 
@@ -551,6 +559,7 @@ function renderHistory() {
 function renderSettings() {
   const s = state.settings;
   $("#telegramEnabled").checked = !!s.telegramEnabled;
+  if ($("#autoBackupEnabled")) $("#autoBackupEnabled").checked = s.autoBackupEnabled !== false;
   $("#apiBase").value = s.apiBase || "";
   $("#appKey").value = s.appKey || "";
   $("#chatId").value = s.chatId || "";
@@ -1034,7 +1043,10 @@ function readSettingsForm() {
     timezone: $("#timezone").value.trim() || "Europe/Rome",
     cloudBackupLast: state.settings.cloudBackupLast || "",
     cloudBackupBytes: Number(state.settings.cloudBackupBytes) || 0,
-    recoveryCode: state.settings.recoveryCode || ""
+    recoveryCode: state.settings.recoveryCode || "",
+    backupId: state.settings.backupId || "",
+    autoBackupEnabled: $("#autoBackupEnabled") ? $("#autoBackupEnabled").checked : state.settings.autoBackupEnabled !== false,
+    telegramRecoverySentFor: state.settings.telegramRecoverySentFor || ""
   };
 }
 
@@ -1285,6 +1297,7 @@ function randomRecoverySecret() {
 }
 
 function createRecoveryCode({ apiBase, appKey, password }) {
+  // Compatibilità con i vecchi backup TIO1.
   const payload = {
     v: 1,
     api: normalizeApiBase(apiBase),
@@ -1295,11 +1308,21 @@ function createRecoveryCode({ apiBase, appKey, password }) {
   return `TIO1.${bytesToBase64Url(encoded)}`;
 }
 
+function createRecoveryCodeV2({ apiBase, backupId, password }) {
+  const payload = {
+    v: 2,
+    api: normalizeApiBase(apiBase),
+    backup: String(backupId || "").trim(),
+    secret: String(password || "")
+  };
+  const encoded = new TextEncoder().encode(JSON.stringify(payload));
+  return `TIO2.${bytesToBase64Url(encoded)}`;
+}
+
 function normalizeRecoveryInput(value) {
   let clean = String(value || "").trim();
   if (!clean) throw new Error("Inserisci il codice di ripristino");
 
-  // Accetta anche il collegamento completo generato da “Condividi collegamento”.
   try {
     if (/^https?:\/\//i.test(clean)) {
       const url = new URL(clean);
@@ -1307,25 +1330,25 @@ function normalizeRecoveryInput(value) {
       if (fromUrl) clean = fromUrl;
     }
   } catch {
-    // Se non è un URL valido continuiamo a trattarlo come codice.
+    // Continuiamo a trattarlo come codice.
   }
 
   clean = clean.replace(/\s+/g, "");
 
-  // Compatibilità prudente: alcune tastiere/copia-incolla possono perdere il prefisso.
-  // Se il contenuto sembra un payload Base64URL valido, ricostruiamo TIO1.
-  if (!clean.startsWith("TIO1.")) {
+  if (!clean.startsWith("TIO1.") && !clean.startsWith("TIO2.")) {
     try {
       const candidate = JSON.parse(new TextDecoder().decode(base64UrlToBytes(clean)));
-      if (candidate?.v === 1 && candidate?.api && candidate?.key && candidate?.secret) {
+      if (candidate?.v === 2 && candidate?.api && candidate?.backup && candidate?.secret) {
+        clean = `TIO2.${clean}`;
+      } else if (candidate?.v === 1 && candidate?.api && candidate?.key && candidate?.secret) {
         clean = `TIO1.${clean}`;
       }
     } catch {
-      // Verrà gestito dall'errore esplicito qui sotto.
+      // Errore esplicito sotto.
     }
   }
 
-  if (!clean.startsWith("TIO1.")) {
+  if (!clean.startsWith("TIO1.") && !clean.startsWith("TIO2.")) {
     throw new Error("Codice di ripristino non riconosciuto");
   }
   return clean;
@@ -1334,14 +1357,24 @@ function normalizeRecoveryInput(value) {
 function decodeRecoveryCode(code) {
   const clean = normalizeRecoveryInput(code);
   try {
+    const isV2 = clean.startsWith("TIO2.");
     const payload = JSON.parse(new TextDecoder().decode(base64UrlToBytes(clean.slice(5))));
     const apiBase = normalizeApiBase(payload?.api || "");
-    const appKey = String(payload?.key || "").trim();
     const password = String(payload?.secret || "");
+
+    if (isV2) {
+      const backupId = String(payload?.backup || "").trim();
+      if (payload?.v !== 2 || !apiBase || backupId.length < 16 || password.length < 8) {
+        throw new Error("Dati incompleti");
+      }
+      return { version: 2, apiBase, backupId, password, code: clean };
+    }
+
+    const appKey = String(payload?.key || "").trim();
     if (payload?.v !== 1 || !apiBase || appKey.length < 8 || password.length < 8) {
       throw new Error("Dati incompleti");
     }
-    return { apiBase, appKey, password, code: clean };
+    return { version: 1, apiBase, appKey, password, code: clean };
   } catch (error) {
     console.error(error);
     throw new Error("Codice di ripristino non valido o danneggiato");
@@ -1361,52 +1394,62 @@ function getEasyBackupCredentials() {
   const apiBase = normalizeApiBase(state.settings.apiBase);
   if (!apiBase) throw new Error("Inserisci prima l’indirizzo API Cloudflare nelle impostazioni");
 
-  let appKey = state.settings.appKey.trim();
+  let backupId = String(state.settings.backupId || "").trim();
   let password = "";
   const currentCode = $("#recoveryCodeInput")?.value.trim() || state.settings.recoveryCode || "";
 
   if (currentCode) {
     try {
       const decoded = decodeRecoveryCode(currentCode);
-      appKey = decoded.appKey;
-      password = decoded.password;
+      if (decoded.version === 2) {
+        backupId = decoded.backupId;
+        password = decoded.password;
+      }
     } catch {
-      // Se il campo contiene un testo non valido, viene creato un nuovo codice.
+      // Se il codice non è valido, ne viene creato uno nuovo.
     }
   }
 
-  if (appKey.length < 8) appKey = randomHex(16);
+  if (backupId.length < 16) backupId = randomHex(20);
   if (password.length < 8) password = randomRecoverySecret();
 
-  const code = createRecoveryCode({ apiBase, appKey, password });
+  const code = createRecoveryCodeV2({ apiBase, backupId, password });
   state.settings.apiBase = apiBase;
-  state.settings.appKey = appKey;
+  state.settings.backupId = backupId;
   state.settings.recoveryCode = code;
   $("#apiBase").value = apiBase;
-  $("#appKey").value = appKey;
   $("#cloudBackupPassword").value = password;
   setRecoveryCode(code);
-  return { apiBase, appKey, password, code };
+  return { version: 2, apiBase, backupId, password, code };
 }
 
-async function performOnlineBackup({ apiBase, appKey, password }) {
+async function performOnlineBackup(credentials) {
+  const { apiBase, password } = credentials;
   setCloudBackupStatus("Preparazione e cifratura del backup…", "working");
   const packageData = await buildCompleteBackup();
   const envelope = await encryptBackupPackage(packageData, password);
-  const response = await fetch(`${apiBase}/backup`, {
+
+  const isV2 = credentials.version === 2 || credentials.backupId;
+  const endpoint = isV2 ? `${apiBase}/backup2` : `${apiBase}/backup`;
+  const body = isV2
+    ? { backupId: credentials.backupId, envelope }
+    : { appKey: credentials.appKey, envelope };
+
+  const response = await fetch(endpoint, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ appKey, envelope })
+    body: JSON.stringify(body)
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(result.error || `Errore ${response.status}`);
+
   state.settings.cloudBackupLast = result.updatedAt || new Date().toISOString();
   state.settings.cloudBackupBytes = Number(result.bytes) || 0;
+  if (isV2) state.settings.backupId = credentials.backupId;
   writeStateToLocalStorage();
 
-  // Verifica che il backup sia davvero leggibile prima di confermare il successo.
   setCloudBackupStatus("Backup salvato. Verifica disponibilità…", "working");
-  await fetchBackupWithRetry(apiBase, appKey, 4);
+  await fetchBackupWithRetry(credentials, 4);
 
   setCloudBackupStatus(
     `Backup online completato e verificato: ${new Date(state.settings.cloudBackupLast).toLocaleString("it-IT")} · ${formatBytes(state.settings.cloudBackupBytes)}`,
@@ -1415,7 +1458,7 @@ async function performOnlineBackup({ apiBase, appKey, password }) {
   return result;
 }
 
-async function checkBackupWorker(apiBase) {
+async function checkBackupWorker(apiBase, requireV2 = false) {
   let response;
   try {
     response = await fetch(`${apiBase}/check?backup=${Date.now()}`, { cache: "no-store" });
@@ -1426,22 +1469,26 @@ async function checkBackupWorker(apiBase) {
   if (!response.ok) throw new Error(info.error || `Worker non raggiungibile (${response.status})`);
   if (info.kvConfigured === false) throw new Error("Archivio Cloudflare KV non collegato al Worker.");
   if (info.backupSupported === false) throw new Error("Il Worker Cloudflare non è aggiornato alla versione con Backup.");
+  if (requireV2 && info.backupV2Supported !== true) {
+    throw new Error("Il Worker Cloudflare deve essere aggiornato alla nuova versione Backup V2.");
+  }
   return info;
 }
 
-async function fetchBackupWithRetry(apiBase, appKey, attempts = 6) {
+async function fetchBackupWithRetry(credentials, attempts = 6) {
+  const isV2 = credentials.version === 2 || credentials.backupId;
+  const apiBase = normalizeApiBase(credentials.apiBase);
   let lastError = null;
+
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      const response = await fetch(
-        `${apiBase}/backup?appKey=${encodeURIComponent(appKey)}&_=${Date.now()}`,
-        { cache: "no-store" }
-      );
+      const url = isV2
+        ? `${apiBase}/backup2?backupId=${encodeURIComponent(credentials.backupId)}&_=${Date.now()}`
+        : `${apiBase}/backup?appKey=${encodeURIComponent(credentials.appKey)}&_=${Date.now()}`;
+      const response = await fetch(url, { cache: "no-store" });
       const result = await response.json().catch(() => ({}));
       if (response.ok) return result;
-
       const message = result.error || `Errore ${response.status}`;
-      // 404 può essere temporaneo subito dopo una scrittura KV: ritentiamo.
       if (response.status !== 404 && response.status < 500) throw new Error(message);
       lastError = new Error(message);
     } catch (error) {
@@ -1450,21 +1497,29 @@ async function fetchBackupWithRetry(apiBase, appKey, attempts = 6) {
 
     if (attempt < attempts) {
       setCloudBackupStatus(`Backup non ancora disponibile, nuovo tentativo ${attempt + 1}/${attempts}…`, "working");
-      await new Promise((resolve) => setTimeout(resolve, 2500));
+      await new Promise((resolve) => setTimeout(resolve, 1800));
     }
   }
   throw lastError || new Error("Backup non trovato su Cloudflare");
 }
 
-async function performOnlineRestore({ apiBase, appKey, password }) {
+async function performOnlineRestore(credentials) {
+  const { apiBase, password } = credentials;
+  const isV2 = credentials.version === 2 || credentials.backupId;
   setCloudBackupStatus("Verifica del Worker Cloudflare…", "working");
-  await checkBackupWorker(apiBase);
+  await checkBackupWorker(apiBase, isV2);
   setCloudBackupStatus("Download e decifratura del backup…", "working");
-  const result = await fetchBackupWithRetry(apiBase, appKey);
+  const result = await fetchBackupWithRetry(credentials);
   const packageData = await decryptBackupEnvelope(result.envelope, password);
-  await restoreBackupPackage(packageData, { preserveConnection: true });
+  autoBackupSuspended = true;
+  try {
+    await restoreBackupPackage(packageData, { preserveConnection: true });
+  } finally {
+    autoBackupSuspended = false;
+  }
   state.settings.cloudBackupLast = result.updatedAt || packageData.exportedAt || new Date().toISOString();
   state.settings.cloudBackupBytes = Number(result.bytes) || 0;
+  if (isV2) state.settings.backupId = credentials.backupId;
   writeStateToLocalStorage();
   setCloudBackupStatus(
     `Backup ripristinato: ${new Date(state.settings.cloudBackupLast).toLocaleString("it-IT")} · ${formatBytes(state.settings.cloudBackupBytes)}`,
@@ -1473,15 +1528,129 @@ async function performOnlineRestore({ apiBase, appKey, password }) {
   return result;
 }
 
+
+function canAutoBackup() {
+  if (autoBackupSuspended || state.settings.autoBackupEnabled === false) return false;
+  const apiBase = normalizeApiBase(state.settings.apiBase || "");
+  if (!apiBase) return false;
+  if (!state.therapies.length && !state.logs.length) return false;
+  return true;
+}
+
+function scheduleAutoBackup(delay = 3500) {
+  if (!canAutoBackup()) return;
+  autoBackupDirty = true;
+  clearTimeout(autoBackupTimer);
+  autoBackupTimer = setTimeout(runAutoBackup, Math.max(500, delay));
+}
+
+async function runAutoBackup() {
+  if (!canAutoBackup()) return;
+  if (autoBackupInFlight) {
+    autoBackupDirty = true;
+    return;
+  }
+
+  autoBackupInFlight = true;
+  autoBackupDirty = false;
+  try {
+    const credentials = getEasyBackupCredentials();
+    await checkBackupWorker(credentials.apiBase, true);
+    await performOnlineBackup(credentials);
+    setRecoveryCode(credentials.code);
+    await sendRecoveryLinkToTelegram(credentials, { force: false }).catch((error) => {
+      console.warn("Link di recupero Telegram non inviato", error);
+    });
+  } catch (error) {
+    console.warn("Backup automatico non riuscito", error);
+    setCloudBackupStatus(`Backup automatico in attesa: ${error?.message || "errore"}`, "error");
+  } finally {
+    autoBackupInFlight = false;
+    if (autoBackupDirty) scheduleAutoBackup(2500);
+  }
+}
+
+async function sendRecoveryLinkToTelegram(credentials, { force = false } = {}) {
+  const apiBase = normalizeApiBase(credentials?.apiBase || state.settings.apiBase || "");
+  const recoveryCode = credentials?.code || state.settings.recoveryCode || "";
+  const chatId = String($("#chatId")?.value || state.settings.chatId || "").trim();
+
+  if (!apiBase) throw new Error("Indirizzo Cloudflare mancante");
+  if (!recoveryCode) throw new Error("Prima crea almeno un backup");
+  if (!/^-?\d+$/.test(chatId)) throw new Error("Chat ID Telegram non configurato");
+
+  if (!force && state.settings.telegramRecoverySentFor === recoveryCode) {
+    return { ok: true, skipped: true };
+  }
+
+  const response = await fetch(`${apiBase}/recovery-link`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      chatId,
+      recoveryCode,
+      updatedAt: state.settings.cloudBackupLast || new Date().toISOString()
+    })
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || `Errore Telegram ${response.status}`);
+
+  state.settings.telegramRecoverySentFor = recoveryCode;
+  writeStateToLocalStorage();
+  return result;
+}
+
+async function sendRecoveryLinkNow() {
+  try {
+    const credentials = getEasyBackupCredentials();
+    await sendRecoveryLinkToTelegram(credentials, { force: true });
+    showToast("Link di recupero inviato su Telegram.");
+    setCloudBackupStatus("Link di recupero inviato su Telegram. Conservalo nella chat del bot.", "success");
+  } catch (error) {
+    const message = error?.message || "Invio non riuscito";
+    setCloudBackupStatus(`Errore Telegram: ${message}`, "error");
+    showToast(message);
+  }
+}
+
 async function easyBackup() {
   try {
     const credentials = getEasyBackupCredentials();
+    await checkBackupWorker(credentials.apiBase, true);
     await performOnlineBackup(credentials);
     setRecoveryCode(credentials.code);
-    showToast("Backup completato. Conserva il codice di ripristino.");
+    try {
+      await sendRecoveryLinkToTelegram(credentials, { force: true });
+      showToast("Backup completato. Link di recupero inviato su Telegram.");
+    } catch (telegramError) {
+      console.warn(telegramError);
+      showToast("Backup completato. Il link Telegram non è stato inviato.");
+    }
   } catch (error) {
-    setCloudBackupStatus(`Errore: ${error.message}`, "error");
-    showToast("Backup online non riuscito.");
+    const message = error?.message || "Errore sconosciuto";
+    setCloudBackupStatus(`Errore: ${message}`, "error");
+    showToast(message.length > 70 ? "Backup non riuscito: controlla il messaggio in rosso." : message);
+  }
+}
+
+async function verifyRecoveryBackup() {
+  try {
+    const credentials = decodeRecoveryCode($("#recoveryCodeInput")?.value || "");
+    setCloudBackupStatus("Verifica del codice e del backup…", "working");
+    await checkBackupWorker(credentials.apiBase, credentials.version === 2);
+    const result = await fetchBackupWithRetry(credentials, 2);
+    await decryptBackupEnvelope(result.envelope, credentials.password);
+    setCloudBackupStatus(
+      `Backup verificato: disponibile e decifrabile · ${formatBytes(Number(result.bytes) || 0)}`,
+      "success"
+    );
+    showToast("Backup verificato correttamente.");
+    return true;
+  } catch (error) {
+    const message = error?.message || "Errore sconosciuto";
+    setCloudBackupStatus(`Errore verifica: ${message}`, "error");
+    showToast(message.length > 70 ? "Verifica non riuscita: controlla il messaggio in rosso." : message);
+    return false;
   }
 }
 
@@ -1491,14 +1660,17 @@ async function restoreWithRecoveryCode() {
     const credentials = decodeRecoveryCode($("#recoveryCodeInput")?.value || "");
     if (!confirm("Il ripristino sostituirà terapie, archivio, storico e fotografie presenti su questo dispositivo. Continuare?")) return;
 
-    // Impostiamo temporaneamente i dati nel form, ma li rendiamo permanenti
-    // soltanto dopo che il backup è stato realmente scaricato e decifrato.
     $("#apiBase").value = credentials.apiBase;
-    $("#appKey").value = credentials.appKey;
     $("#cloudBackupPassword").value = credentials.password;
     state.settings.apiBase = credentials.apiBase;
-    state.settings.appKey = credentials.appKey;
     state.settings.recoveryCode = credentials.code;
+
+    if (credentials.version === 1) {
+      $("#appKey").value = credentials.appKey;
+      state.settings.appKey = credentials.appKey;
+    } else {
+      state.settings.backupId = credentials.backupId;
+    }
 
     await performOnlineRestore(credentials);
     setRecoveryCode(credentials.code);
@@ -1561,14 +1733,25 @@ async function shareRecoveryCode() {
 function loadRecoveryCodeFromUrl() {
   const url = new URL(location.href);
   const code = url.searchParams.get("restore");
-  if (!code) return;
+  if (!code) return false;
   try {
     decodeRecoveryCode(code);
     setRecoveryCode(code);
     showView("settings");
-    setCloudBackupStatus("Codice ricevuto. Premi “Ripristina con il codice”.", "working");
+    setCloudBackupStatus("Backup trovato dal link Telegram. Conferma per ripristinarlo.", "working");
+    autoBackupSuspended = true;
+    setTimeout(async () => {
+      try {
+        await restoreWithRecoveryCode();
+      } finally {
+        autoBackupSuspended = false;
+      }
+    }, 250);
+    return true;
   } catch (error) {
+    autoBackupSuspended = false;
     setCloudBackupStatus(`Errore: ${error.message}`, "error");
+    return false;
   } finally {
     url.searchParams.delete("restore");
     history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
@@ -1892,9 +2075,16 @@ function bindEvents() {
   $("#saveCloudBtn").addEventListener("click", saveCloudSettings);
   $("#testTelegramBtn").addEventListener("click", testTelegram);
   $("#easyBackupBtn").addEventListener("click", easyBackup);
+  $("#sendRecoveryTelegramBtn")?.addEventListener("click", sendRecoveryLinkNow);
+  $("#autoBackupEnabled")?.addEventListener("change", (event) => {
+    state.settings.autoBackupEnabled = event.target.checked;
+    writeStateToLocalStorage();
+    if (event.target.checked) scheduleAutoBackup(500);
+  });
   $("#copyRecoveryCodeBtn").addEventListener("click", copyRecoveryCode);
   $("#shareRecoveryCodeBtn").addEventListener("click", shareRecoveryCode);
   $("#restoreWithCodeBtn").addEventListener("click", restoreWithRecoveryCode);
+  $("#verifyRecoveryCodeBtn")?.addEventListener("click", verifyRecoveryBackup);
   $("#recoveryCodeInput").addEventListener("change", (event) => {
     state.settings.recoveryCode = event.target.value.trim();
     writeStateToLocalStorage();
@@ -1931,7 +2121,8 @@ async function init() {
   // Libera automaticamente eventuali dati pesanti lasciati dalle vecchie versioni.
   writeStateToLocalStorage();
   renderAll();
-  loadRecoveryCodeFromUrl();
+  const recoveryLinkOpened = loadRecoveryCodeFromUrl();
+  if (!recoveryLinkOpened) scheduleAutoBackup(5000);
   if ("serviceWorker" in navigator) {
     try { await navigator.serviceWorker.register("sw.js"); } catch (error) { console.error(error); }
   }

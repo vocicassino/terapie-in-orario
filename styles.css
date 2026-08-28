@@ -287,3 +287,9 @@ legend { font-weight: 850; padding: 0 6px; }
   color: #9a2f2f;
   font-weight: 800;
 }
+
+/* Backup automatico + recupero Telegram */
+.auto-backup-row { margin-top: 14px; padding: 12px 4px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.auto-backup-row p { margin: 4px 0 0; }
+.simple-backup-panel { display: grid; gap: 10px; }
+.simple-backup-panel .wide-button { margin: 0; }

@@ -139,35 +139,47 @@
       <article class="settings-card cloud-backup-card">
         <div class="settings-title-row">
           <div>
-            <h3>Backup e ripristino facile</h3>
-            <p>Salva su Cloudflare terapie, archivio, storico e fotografie. Per cambiare telefono ti servirà un solo codice.</p>
+            <h3>Backup automatico</h3>
+            <p>L'app salva automaticamente su Cloudflare terapie, archivio, storico e fotografie. Il link di recupero resta nella chat Telegram anche se formatti o perdi il telefono.</p>
           </div>
           <span class="cloud-icon" aria-hidden="true">☁️</span>
         </div>
 
-        <div class="easy-backup-panel">
-          <button id="easyBackupBtn" class="primary wide-button" type="button">Salva backup e crea il codice</button>
-
-          <label>Codice unico di ripristino
-            <textarea id="recoveryCodeInput" rows="4" spellcheck="false" autocomplete="off" placeholder="Il codice comparirà qui dopo il backup. Sul nuovo telefono puoi incollarlo qui."></textarea>
-          </label>
-          <p class="small-note recovery-warning"><strong>Conservalo come una password:</strong> chi possiede questo codice può recuperare il backup.</p>
-
-          <div class="row-actions backup-actions">
-            <button id="copyRecoveryCodeBtn" class="secondary" type="button">Copia codice</button>
-            <button id="shareRecoveryCodeBtn" class="secondary" type="button">Condividi collegamento</button>
-            <button id="restoreWithCodeBtn" class="primary" type="button">Ripristina con il codice</button>
+        <div class="switch-row auto-backup-row">
+          <div>
+            <strong>Backup automatico</strong>
+            <p class="small-note">Aggiorna il backup dopo modifiche, nuove terapie e registrazioni Presa/Saltata.</p>
           </div>
+          <label class="switch">
+            <input id="autoBackupEnabled" type="checkbox" checked>
+            <span></span>
+          </label>
+        </div>
+
+        <div class="easy-backup-panel simple-backup-panel">
+          <button id="easyBackupBtn" class="primary wide-button" type="button">Backup adesso</button>
+          <button id="sendRecoveryTelegramBtn" class="secondary wide-button" type="button">Invia link di recupero su Telegram</button>
+          <p class="small-note"><strong>Dopo un ripristino del telefono:</strong> reinstalla Telegram, apri la chat del bot e premi “Ripristina Terapie in Orario”. L'app si apre e ti chiede soltanto la conferma.</p>
         </div>
 
         <details class="advanced-backup-options">
-          <summary>Opzioni avanzate</summary>
-          <p class="small-note">Servono soltanto per usare un vecchio backup creato con chiave personale e password separate.</p>
+          <summary>Recupero manuale / avanzato</summary>
+          <p class="small-note">Il codice resta disponibile come sistema di emergenza. Normalmente non serve copiarlo.</p>
+          <label>Codice di recupero
+            <textarea id="recoveryCodeInput" rows="4" spellcheck="false" autocomplete="off" placeholder="Codice TIO2 di emergenza"></textarea>
+          </label>
+          <p class="small-note recovery-warning"><strong>Riservato:</strong> chi possiede questo codice può recuperare il backup.</p>
+          <div class="row-actions backup-actions">
+            <button id="copyRecoveryCodeBtn" class="secondary" type="button">Copia codice</button>
+            <button id="shareRecoveryCodeBtn" class="secondary" type="button">Condividi collegamento</button>
+            <button id="restoreWithCodeBtn" class="primary" type="button">Ripristina manualmente</button>
+            <button id="verifyRecoveryCodeBtn" class="secondary" type="button">Verifica backup</button>
+          </div>
           <label>Password del vecchio backup
-            <input id="cloudBackupPassword" type="password" minlength="8" autocomplete="new-password" placeholder="Almeno 8 caratteri">
+            <input id="cloudBackupPassword" type="password" minlength="8" autocomplete="new-password" placeholder="Solo per vecchi backup">
           </label>
           <div class="row-actions backup-actions">
-            <button id="saveOnlineBackupBtn" class="secondary" type="button">Salva con password</button>
+            <button id="saveOnlineBackupBtn" class="secondary" type="button">Salva vecchio formato</button>
             <button id="restoreOnlineBackupBtn" class="secondary" type="button">Ripristina vecchio backup</button>
             <button id="deleteOnlineBackupBtn" class="text-btn danger-text" type="button">Elimina backup cloud</button>
           </div>
