@@ -81,3 +81,38 @@ e sostituire l'espressione precedente con:
 - Sono mostrati motivi chiari: “Terminata”, “Non iniziata”, “Pausa mensile”, oppure “Oggi”.
 - Se la data fine è trascorsa, viene indicato di usare “Ripeti” per impostarla nuovamente.
 - Nessuna modifica richiesta al Worker Cloudflare rispetto alla v21.
+
+
+## v23 – correzione valori scorte
+
+Corretto il campo “Unità per assunzione”: il precedente `min=0.1` + `step=0.5`
+rendeva **1** un valore non valido (il browser proponeva infatti 0,6 oppure 1,1).
+
+Ora i campi scorte accettano liberamente valori decimali:
+- 1
+- 0,5
+- 0,25
+- 1,5
+ecc.
+
+Nessuna modifica al Worker Cloudflare è necessaria.
+
+
+## v24 – terapia ciclica
+
+Aggiunta una vera programmazione ciclica, utile per terapie come:
+- 14 giorni di terapia
+- ogni 2 mesi
+- per 3 cicli
+
+Esempio con inizio 01/09/2026:
+- 01/09–14/09
+- 01/11–14/11
+- 01/01/2027–14/01/2027
+
+La Data fine complessiva viene calcolata automaticamente.
+La schermata Oggi, il Calendario e Telegram usano la stessa logica.
+L'anti-duplicato continua a bloccare copie vere, ma il messaggio ora invita a modificare
+la terapia esistente e trasformarla in ciclica invece di crearne una seconda.
+
+Questa versione richiede anche l'aggiornamento del Worker Cloudflare.

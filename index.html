@@ -8,7 +8,7 @@
   <title>Terapie in Orario</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=17">
+  <link rel="stylesheet" href="styles.css?v=24">
 </head>
 <body>
   <header class="app-header">
@@ -300,16 +300,16 @@
         <legend>Scorte</legend>
         <div class="three-cols">
           <label>Unità disponibili
-            <input id="stockUnits" type="number" min="0" step="0.5" inputmode="decimal" placeholder="Es. 30">
+            <input id="stockUnits" type="number" min="0" step="any" inputmode="decimal" placeholder="Es. 30">
           </label>
           <label>Unità per assunzione
-            <input id="doseUnits" type="number" min="0.1" step="0.5" inputmode="decimal" value="1">
+            <input id="doseUnits" type="number" min="0.01" step="any" inputmode="decimal" value="1">
           </label>
           <label>Avvisa sotto
-            <input id="lowStockThreshold" type="number" min="0" step="1" inputmode="numeric" value="5">
+            <input id="lowStockThreshold" type="number" min="0" step="any" inputmode="decimal" value="5">
           </label>
         </div>
-        <p class="small-note">Quando registri “Presa”, la scorta viene scalata automaticamente. Lascia “Unità disponibili” vuoto se non vuoi usare la gestione scorte.</p>
+        <p class="small-note">Quando registri “Presa”, la scorta viene scalata automaticamente. Puoi usare anche valori frazionari, per esempio 1, 0,5 oppure 0,25. Lascia “Unità disponibili” vuoto se non vuoi usare la gestione scorte.</p>
       </fieldset>
 
       <fieldset>
@@ -351,22 +351,54 @@
         <button id="addTimeBtn" class="secondary small" type="button">+ Aggiungi orario</button>
       </fieldset>
 
+      <label>Tipo di programmazione
+        <select id="scheduleType">
+          <option value="standard">Periodo normale</option>
+          <option value="cyclic">Terapia ciclica</option>
+        </select>
+      </label>
+
       <div class="two-cols">
         <label>Data inizio
           <input id="startDate" type="date">
         </label>
-        <label>Data fine
+        <label id="endDateLabel">Data fine
           <input id="endDate" type="date">
         </label>
       </div>
 
-      <label>Periodicità mensile
-        <select id="monthInterval">
-          <option value="1">Ogni mese</option>
-          <option value="2">Mesi alterni (un mese sì, uno no)</option>
-        </select>
-      </label>
-      <p class="small-note">Con “Mesi alterni”, il mese della Data inizio è il primo mese attivo. Esempio: inizio ad agosto → agosto, ottobre, dicembre…</p>
+      <div id="standardScheduleFields">
+        <label>Periodicità mensile
+          <select id="monthInterval">
+            <option value="1">Ogni mese</option>
+            <option value="2">Mesi alterni (un mese sì, uno no)</option>
+          </select>
+        </label>
+        <p class="small-note">Con “Mesi alterni”, il mese della Data inizio è il primo mese attivo. Esempio: inizio a settembre → settembre, novembre, gennaio…</p>
+      </div>
+
+      <fieldset id="cycleFields" class="hidden cycle-fields">
+        <legend>Ciclo terapeutico</legend>
+        <div class="three-cols">
+          <label>Giorni di terapia
+            <input id="cycleDurationDays" type="number" min="1" step="1" inputmode="numeric" value="14">
+          </label>
+          <label>Ripeti ogni
+            <select id="cycleIntervalMonths">
+              <option value="1">1 mese</option>
+              <option value="2" selected>2 mesi</option>
+              <option value="3">3 mesi</option>
+              <option value="4">4 mesi</option>
+              <option value="6">6 mesi</option>
+            </select>
+          </label>
+          <label>Numero cicli
+            <input id="cycleCount" type="number" min="1" max="24" step="1" inputmode="numeric" value="3">
+          </label>
+        </div>
+        <p id="cyclePreview" class="cycle-preview"></p>
+        <p class="small-note">Esempio: 14 giorni, ogni 2 mesi, per 3 cicli = 14 giorni nel mese iniziale, 14 giorni due mesi dopo e 14 giorni altri due mesi dopo.</p>
+      </fieldset>
 
       <label>Note
         <textarea id="therapyNotes" rows="3" maxlength="250" placeholder="Esempio: dopo colazione"></textarea>
@@ -403,6 +435,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="app.js?v=17"></script>
+  <script src="app.js?v=24"></script>
 </body>
 </html>

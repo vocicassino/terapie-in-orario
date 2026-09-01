@@ -638,3 +638,19 @@ input,textarea,select { border-radius:13px; background:#fff; }
   font-size:.84rem;
   font-weight:800;
 }
+
+/* v24 terapia ciclica */
+.three-cols { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+.cycle-fields { background:#f8fcfb; border-color:#bddfd6; }
+.cycle-preview {
+  margin:12px 0 0;
+  padding:10px 12px;
+  border-radius:12px;
+  background:#e8f6f2;
+  color:var(--primary-dark);
+  font-size:.85rem;
+  line-height:1.45;
+}
+@media (max-width:560px) {
+  .three-cols { grid-template-columns:1fr; }
+}

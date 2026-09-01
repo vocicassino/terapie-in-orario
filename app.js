@@ -80,6 +80,10 @@ function normalizeTherapyRecord(therapy = {}) {
     archived: therapy.archived === true,
     archivedAt: therapy.archivedAt || "",
     monthInterval: Math.max(1, Number.parseInt(therapy.monthInterval || 1, 10) || 1),
+    scheduleType: therapy.scheduleType === "cyclic" ? "cyclic" : "standard",
+    cycleDurationDays: Math.max(1, Number.parseInt(therapy.cycleDurationDays || 14, 10) || 14),
+    cycleIntervalMonths: Math.max(1, Number.parseInt(therapy.cycleIntervalMonths || 2, 10) || 2),
+    cycleCount: Math.max(1, Number.parseInt(therapy.cycleCount || 3, 10) || 3),
     stockUnits: therapy.stockUnits === "" || therapy.stockUnits == null ? "" : Math.max(0, Number(therapy.stockUnits) || 0),
     doseUnits: Math.max(0.1, Number(therapy.doseUnits) || 1),
     lowStockThreshold: Math.max(0, Number(therapy.lowStockThreshold) || 5)
@@ -302,6 +306,87 @@ function addDaysToIso(iso, days) {
   return localDateISO(date);
 }
 
+
+function parseIsoDateLocal(iso) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ""));
+  if (!match) return null;
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12, 0, 0);
+}
+
+function addCalendarMonths(date, months) {
+  const originalDay = date.getDate();
+  const first = new Date(date.getFullYear(), date.getMonth() + months, 1, 12, 0, 0);
+  const lastDay = new Date(first.getFullYear(), first.getMonth() + 1, 0, 12, 0, 0).getDate();
+  first.setDate(Math.min(originalDay, lastDay));
+  return first;
+}
+
+function cyclicSchedule(therapy) {
+  const normalized = normalizeTherapyRecord(therapy);
+  if (normalized.scheduleType !== "cyclic" || !normalized.startDate) return [];
+  const firstStart = parseIsoDateLocal(normalized.startDate);
+  if (!firstStart) return [];
+  const windows = [];
+  for (let index = 0; index < normalized.cycleCount; index += 1) {
+    const start = addCalendarMonths(firstStart, index * normalized.cycleIntervalMonths);
+    const end = new Date(start);
+    end.setDate(end.getDate() + normalized.cycleDurationDays - 1);
+    windows.push({
+      index: index + 1,
+      startDate: localDateISO(start),
+      endDate: localDateISO(end)
+    });
+  }
+  return windows;
+}
+
+function cyclicApplies(therapy, date) {
+  const iso = localDateISO(date);
+  return cyclicSchedule(therapy).some((window) => iso >= window.startDate && iso <= window.endDate);
+}
+
+function cyclicFinalEndDate(therapy) {
+  const windows = cyclicSchedule(therapy);
+  return windows.length ? windows[windows.length - 1].endDate : "";
+}
+
+function formatShortIso(iso) {
+  const parts = String(iso || "").split("-");
+  return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : iso;
+}
+
+function updateCycleFields() {
+  const type = $("#scheduleType")?.value || "standard";
+  const cyclic = type === "cyclic";
+  $("#cycleFields")?.classList.toggle("hidden", !cyclic);
+  $("#standardScheduleFields")?.classList.toggle("hidden", cyclic);
+
+  const endInput = $("#endDate");
+  const endLabel = $("#endDateLabel");
+  if (endInput && endLabel) {
+    endInput.readOnly = cyclic;
+    endLabel.childNodes[0].textContent = cyclic ? "Fine complessiva (automatica) " : "Data fine ";
+  }
+
+  if (!cyclic) return;
+
+  const draft = {
+    scheduleType: "cyclic",
+    startDate: $("#startDate")?.value || localDateISO(),
+    cycleDurationDays: Math.max(1, Number.parseInt($("#cycleDurationDays")?.value || "14", 10) || 14),
+    cycleIntervalMonths: Math.max(1, Number.parseInt($("#cycleIntervalMonths")?.value || "2", 10) || 2),
+    cycleCount: Math.max(1, Number.parseInt($("#cycleCount")?.value || "3", 10) || 3)
+  };
+  const windows = cyclicSchedule(draft);
+  if (endInput) endInput.value = windows.length ? windows[windows.length - 1].endDate : "";
+  const preview = $("#cyclePreview");
+  if (preview) {
+    preview.innerHTML = windows.length
+      ? `<strong>Cicli programmati:</strong> ${windows.map((w) => `${formatShortIso(w.startDate)}–${formatShortIso(w.endDate)}`).join(" · ")}`
+      : "Inserisci una data di inizio valida.";
+  }
+}
+
 function inclusiveDurationDays(startIso, endIso) {
   if (!startIso || !endIso) return null;
   const start = new Date(`${startIso}T12:00:00`);
@@ -346,7 +431,13 @@ function sameTherapySchedule(first, second) {
     normalizeTherapyText(first?.dose) === normalizeTherapyText(second?.dose) &&
     sameArrayValues(normalizedDays(first), normalizedDays(second)) &&
     sameArrayValues(normalizedTimes(first), normalizedTimes(second)) &&
-    monthIntervalValue(first) === monthIntervalValue(second)
+    monthIntervalValue(first) === monthIntervalValue(second) &&
+    normalizeTherapyRecord(first).scheduleType === normalizeTherapyRecord(second).scheduleType &&
+    (normalizeTherapyRecord(first).scheduleType !== "cyclic" || (
+      normalizeTherapyRecord(first).cycleDurationDays === normalizeTherapyRecord(second).cycleDurationDays &&
+      normalizeTherapyRecord(first).cycleIntervalMonths === normalizeTherapyRecord(second).cycleIntervalMonths &&
+      normalizeTherapyRecord(first).cycleCount === normalizeTherapyRecord(second).cycleCount
+    ))
   );
 }
 
@@ -372,8 +463,14 @@ function therapyApplies(therapy, date) {
   if (normalized.archived || !normalized.active) return false;
   const iso = localDateISO(date);
   if (normalized.startDate && iso < normalized.startDate) return false;
-  if (normalized.endDate && iso > normalized.endDate) return false;
-  if (!monthIntervalApplies(normalized, date)) return false;
+  if (normalized.scheduleType === "cyclic") {
+    const finalEnd = cyclicFinalEndDate(normalized);
+    if (finalEnd && iso > finalEnd) return false;
+    if (!cyclicApplies(normalized, date)) return false;
+  } else {
+    if (normalized.endDate && iso > normalized.endDate) return false;
+    if (!monthIntervalApplies(normalized, date)) return false;
+  }
   return normalized.days.includes(date.getDay());
 }
 
@@ -386,11 +483,28 @@ function therapyTodayReason(therapy, date = new Date()) {
   if (normalized.startDate && iso < normalized.startDate) {
     return { key: "future", text: "Non iniziata", detail: `Inizia il ${normalized.startDate.split("-").reverse().join("/")}.` };
   }
-  if (normalized.endDate && iso > normalized.endDate) {
-    return { key: "ended", text: "Terminata", detail: `Data fine ${normalized.endDate.split("-").reverse().join("/")}. Usa “Ripeti” per impostarla nuovamente.` };
-  }
-  if (!monthIntervalApplies(normalized, date)) {
-    return { key: "offmonth", text: "Pausa mensile", detail: "La periodicità a mesi alterni esclude il mese corrente." };
+  if (normalized.scheduleType === "cyclic") {
+    const windows = cyclicSchedule(normalized);
+    const finalEnd = windows.length ? windows[windows.length - 1].endDate : "";
+    if (finalEnd && iso > finalEnd) {
+      return { key: "ended", text: "Terminata", detail: `Tutti i ${normalized.cycleCount} cicli sono conclusi.` };
+    }
+    const activeWindow = windows.find((window) => iso >= window.startDate && iso <= window.endDate);
+    if (!activeWindow) {
+      const nextWindow = windows.find((window) => iso < window.startDate);
+      return {
+        key: "cycle-pause",
+        text: "Pausa ciclo",
+        detail: nextWindow ? `Prossimo ciclo dal ${formatShortIso(nextWindow.startDate)}.` : "Ciclo non attivo oggi."
+      };
+    }
+  } else {
+    if (normalized.endDate && iso > normalized.endDate) {
+      return { key: "ended", text: "Terminata", detail: `Data fine ${normalized.endDate.split("-").reverse().join("/")}. Usa “Ripeti” per impostarla nuovamente.` };
+    }
+    if (!monthIntervalApplies(normalized, date)) {
+      return { key: "offmonth", text: "Pausa mensile", detail: "La periodicità a mesi alterni esclude il mese corrente." };
+    }
   }
   if (!normalized.days.includes(date.getDay())) {
     return { key: "not-today", text: "Attiva", detail: "Oggi non è tra i giorni selezionati." };
@@ -679,7 +793,9 @@ function therapyCardHtml(therapy, { archived = false } = {}) {
         <div class="therapy-times">${therapy.times.map((time) => `<span class="chip time-chip">${escapeHTML(time)}</span>`).join("")}</div>
         <p class="schedule-copy">${therapy.days.length === 7 ? "Tutti i giorni" : therapy.days.map((d) => dayNames[d]).join(", ")}</p>
         <div class="therapy-badges">
-          ${monthIntervalValue(therapy) === 2 ? `<span class="chip recurrence-chip">Mesi alterni</span>` : ""}
+          ${normalizeTherapyRecord(therapy).scheduleType === "cyclic"
+            ? `<span class="chip recurrence-chip">Ciclo ${normalizeTherapyRecord(therapy).cycleDurationDays} gg · ogni ${normalizeTherapyRecord(therapy).cycleIntervalMonths} mesi · ${normalizeTherapyRecord(therapy).cycleCount} volte</span>`
+            : monthIntervalValue(therapy) === 2 ? `<span class="chip recurrence-chip">Mesi alterni</span>` : ""}
           ${stockEnabled(therapy) ? `<span class="chip stock-chip ${isLowStock(therapy) ? "low" : ""}">Scorta ${escapeHTML(stockText(therapy))}</span>` : ""}
           ${therapy.barcode ? `<span class="chip code-chip">Cod. ${escapeHTML(therapy.barcode)}</span>` : ""}
         </div>
@@ -851,7 +967,11 @@ async function openTherapyDialog(id = "") {
   $("#startDate").value = therapy?.startDate || localDateISO();
   $("#endDate").value = therapy?.endDate || "";
   $("#therapyNotes").value = therapy?.notes || "";
+  $("#scheduleType").value = normalizeTherapyRecord(therapy).scheduleType;
   $("#monthInterval").value = String(monthIntervalValue(therapy));
+  $("#cycleDurationDays").value = normalizeTherapyRecord(therapy).cycleDurationDays;
+  $("#cycleIntervalMonths").value = normalizeTherapyRecord(therapy).cycleIntervalMonths;
+  $("#cycleCount").value = normalizeTherapyRecord(therapy).cycleCount;
   $("#therapyActive").checked = therapy?.active ?? true;
   $("#therapyImageInput").value = "";
   currentTherapyImageBlob = null;
@@ -861,6 +981,7 @@ async function openTherapyDialog(id = "") {
     input.checked = therapy ? normalizedDays(therapy).includes(Number(input.value)) : true;
   });
   (therapy?.times || ["08:00"]).forEach(addTimeInput);
+  updateCycleFields();
   $("#therapyDialog").showModal();
 }
 
@@ -883,7 +1004,11 @@ async function openRepeatTherapyDialog(id) {
   $("#lowStockThreshold").value = therapy.lowStockThreshold ?? 5;
   $("#therapyBarcode").value = therapy.barcode || "";
   $("#therapyNotes").value = therapy.notes || "";
+  $("#scheduleType").value = normalizeTherapyRecord(therapy).scheduleType;
   $("#monthInterval").value = String(monthIntervalValue(therapy));
+  $("#cycleDurationDays").value = normalizeTherapyRecord(therapy).cycleDurationDays;
+  $("#cycleIntervalMonths").value = normalizeTherapyRecord(therapy).cycleIntervalMonths;
+  $("#cycleCount").value = normalizeTherapyRecord(therapy).cycleCount;
   $("#therapyActive").checked = true;
   $("#therapyImageInput").value = "";
   currentTherapyImageBlob = null;
@@ -893,6 +1018,7 @@ async function openRepeatTherapyDialog(id) {
   $("#startDate").value = today;
   const duration = inclusiveDurationDays(therapy.startDate, therapy.endDate);
   $("#endDate").value = duration === null ? "" : addDaysToIso(today, duration);
+  updateCycleFields();
 
   $$("input[name='days']").forEach((input) => {
     input.checked = (therapy.days || []).includes(Number(input.value));
@@ -984,17 +1110,24 @@ async function saveTherapy(event) {
     startDate: $("#startDate").value,
     endDate: $("#endDate").value,
     notes: $("#therapyNotes").value.trim(),
-    monthInterval: Math.max(1, Number.parseInt($("#monthInterval").value || "1", 10) || 1),
+    scheduleType: $("#scheduleType")?.value === "cyclic" ? "cyclic" : "standard",
+    cycleDurationDays: Math.max(1, Number.parseInt($("#cycleDurationDays")?.value || "14", 10) || 14),
+    cycleIntervalMonths: Math.max(1, Number.parseInt($("#cycleIntervalMonths")?.value || "2", 10) || 2),
+    cycleCount: Math.max(1, Number.parseInt($("#cycleCount")?.value || "3", 10) || 3),
+    monthInterval: $("#scheduleType")?.value === "cyclic" ? 1 : Math.max(1, Number.parseInt($("#monthInterval").value || "1", 10) || 1),
     active: existing?.archived ? false : $("#therapyActive").checked,
     archived: existing?.archived === true,
     archivedAt: existing?.archivedAt || "",
     updatedAt: new Date().toISOString()
   };
+  if (therapy.scheduleType === "cyclic") {
+    therapy.endDate = cyclicFinalEndDate(therapy);
+  }
   if (!therapy.name || !therapy.dose) return showToast("Compila nome e dose.");
 
   const duplicate = findDuplicateTherapy(therapy, oldId);
   if (duplicate) {
-    const duplicateMessage = `La terapia “${duplicate.name}” è già presente con gli stessi giorni e gli stessi orari in un periodo sovrapposto. La nuova copia non è stata salvata.`;
+    const duplicateMessage = `La terapia “${duplicate.name}” è già presente con gli stessi giorni e gli stessi orari in un periodo sovrapposto. Non serve crearne una seconda copia. Apri “Modifica” sulla terapia esistente e, se deve essere ripetuta a cicli, scegli “Terapia ciclica”.`;
     showToast("Terapia duplicata: salvataggio bloccato.");
     window.alert(duplicateMessage);
     return;
@@ -1214,8 +1347,14 @@ function cloudPayload() {
     enabled: !!state.settings.telegramEnabled,
     therapies: state.therapies
       .filter((therapy) => !therapy.archived)
-      .map(({ id, name, dose, barcode, days, times, startDate, endDate, notes, monthInterval, active }) => ({
-        id, name, dose, barcode, days, times, startDate, endDate, notes, monthInterval: monthIntervalValue({ monthInterval }), active
+      .map(({ id, name, dose, barcode, days, times, startDate, endDate, notes, monthInterval, scheduleType, cycleDurationDays, cycleIntervalMonths, cycleCount, active }) => ({
+        id, name, dose, barcode, days, times, startDate, endDate, notes,
+        monthInterval: monthIntervalValue({ monthInterval }),
+        scheduleType: scheduleType === "cyclic" ? "cyclic" : "standard",
+        cycleDurationDays: Math.max(1, Number.parseInt(cycleDurationDays || 14, 10) || 14),
+        cycleIntervalMonths: Math.max(1, Number.parseInt(cycleIntervalMonths || 2, 10) || 2),
+        cycleCount: Math.max(1, Number.parseInt(cycleCount || 3, 10) || 3),
+        active
       }))
   };
 }
@@ -2389,6 +2528,10 @@ function bindEvents() {
   $$(".nav-btn").forEach((btn) => btn.addEventListener("click", () => showView(btn.dataset.view)));
   ["#addTherapyBtn", "#addFromTodayBtn", "#emptyAddBtn"].forEach((id) => $(id).addEventListener("click", () => openTherapyDialog()));
   $("#addTimeBtn").addEventListener("click", () => addTimeInput("12:00"));
+  ["#scheduleType", "#startDate", "#cycleDurationDays", "#cycleIntervalMonths", "#cycleCount"].forEach((selector) => {
+    $(selector)?.addEventListener("change", updateCycleFields);
+    $(selector)?.addEventListener("input", updateCycleFields);
+  });
   $("#closeDialogBtn").addEventListener("click", closeTherapyDialog);
   $("#cancelDialogBtn").addEventListener("click", closeTherapyDialog);
   $("#therapyForm").addEventListener("submit", saveTherapy);
