@@ -116,3 +116,37 @@ L'anti-duplicato continua a bloccare copie vere, ma il messaggio ora invita a mo
 la terapia esistente e trasformarla in ciclica invece di crearne una seconda.
 
 Questa versione richiede anche l'aggiornamento del Worker Cloudflare.
+
+
+## v25 – calendario completo e modifica manuale dei singoli giorni
+
+- Il Calendario mostra nomi e orari delle terapie programmate in ogni giorno.
+- Toccando un giorno si apre la programmazione manuale.
+- Per ogni terapia puoi:
+  - includerla in quel giorno;
+  - rimuoverla solo da quel giorno;
+  - cambiare gli orari solo per quel giorno;
+  - aprire direttamente “Modifica terapia” per cambiare il programma generale.
+- “Ripristina automatico” elimina tutte le modifiche manuali del giorno.
+- Le modifiche manuali sono incluse nel backup e nella sincronizzazione Cloudflare.
+- Telegram rispetta inclusioni, esclusioni e orari manuali.
+- La modifica di una terapia esistente non viene più bloccata da vecchie copie sovrapposte; il blocco anti-duplicato resta per la creazione di nuove copie.
+- Cache PWA aggiornata a v25.
+
+Questa versione richiede anche l'aggiornamento del Worker Cloudflare.
+
+
+## v26 – Cron ogni 15 minuti
+
+Configurazione consigliata per ridurre le esecuzioni Cloudflare:
+
+`*/15 * * * *`
+
+Il Worker controlla gli ultimi 20 minuti ad ogni esecuzione, così una terapia
+impostata tra due controlli non viene persa. La deduplicazione impedisce
+l'invio dello stesso promemoria più volte.
+
+La diagnostica Telegram considera normale un'ultima esecuzione del Cron
+entro 20 minuti.
+
+Se vuoi mantenere il consumo Cloudflare ridotto, non usare il Cron ogni minuto.

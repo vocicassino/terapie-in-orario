@@ -12,6 +12,7 @@ const defaultState = {
   therapies: [],
   logs: [],
   snoozes: [],
+  scheduleOverrides: [],
   settings: {
     telegramEnabled: false,
     apiBase: "",
@@ -107,6 +108,9 @@ function loadState() {
       ...parsed,
       therapies: Array.isArray(parsed.therapies) ? parsed.therapies.map(normalizeTherapyRecord) : [],
       snoozes: Array.isArray(parsed.snoozes) ? parsed.snoozes : [],
+      scheduleOverrides: Array.isArray(parsed.scheduleOverrides)
+        ? parsed.scheduleOverrides.map(normalizeScheduleOverride).filter(Boolean)
+        : [],
       settings: { ...defaultState.settings, ...(parsed.settings || {}) }
     };
   } catch {
@@ -396,6 +400,52 @@ function inclusiveDurationDays(startIso, endIso) {
 }
 
 
+
+function normalizeScheduleOverride(item = {}) {
+  const therapyId = String(item?.therapyId || "").trim();
+  const date = String(item?.date || "").trim();
+  const mode = item?.mode === "exclude" ? "exclude" : item?.mode === "include" ? "include" : "";
+  const times = [...new Set((Array.isArray(item?.times) ? item.times : [])
+    .map((time) => String(time || "").trim())
+    .filter((time) => /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time)))].sort();
+  if (!therapyId || !/^\d{4}-\d{2}-\d{2}$/.test(date) || !mode) return null;
+  return { therapyId, date, mode, times, updatedAt: item?.updatedAt || "" };
+}
+
+function getScheduleOverride(therapyId, dateIso) {
+  return (state.scheduleOverrides || []).find((item) =>
+    item.therapyId === therapyId && item.date === dateIso
+  ) || null;
+}
+
+function removeScheduleOverride(therapyId, dateIso) {
+  state.scheduleOverrides = (state.scheduleOverrides || []).filter((item) =>
+    !(item.therapyId === therapyId && item.date === dateIso)
+  );
+}
+
+function upsertScheduleOverride(override) {
+  const normalized = normalizeScheduleOverride(override);
+  if (!normalized) return;
+  removeScheduleOverride(normalized.therapyId, normalized.date);
+  state.scheduleOverrides.push(normalized);
+}
+
+function sameTimes(a, b) {
+  const first = [...new Set((a || []).map(String))].sort();
+  const second = [...new Set((b || []).map(String))].sort();
+  return first.length === second.length && first.every((value, index) => value === second[index]);
+}
+
+function parseManualTimes(value) {
+  return [...new Set(String(value || "")
+    .split(/[\s,;]+/)
+    .map((time) => time.trim())
+    .filter(Boolean))]
+    .filter((time) => /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time))
+    .sort();
+}
+
 function normalizeTherapyText(value) {
   return String(value || "")
     .trim()
@@ -458,7 +508,7 @@ function todayDoseDuplicateKey(dose) {
   ].join("|");
 }
 
-function therapyApplies(therapy, date) {
+function baseTherapyApplies(therapy, date) {
   const normalized = normalizeTherapyRecord(therapy);
   if (normalized.archived || !normalized.active) return false;
   const iso = localDateISO(date);
@@ -474,12 +524,36 @@ function therapyApplies(therapy, date) {
   return normalized.days.includes(date.getDay());
 }
 
+function therapyApplies(therapy, date) {
+  const normalized = normalizeTherapyRecord(therapy);
+  if (normalized.archived || !normalized.active) return false;
+  const iso = localDateISO(date);
+  const override = getScheduleOverride(normalized.id, iso);
+  if (override?.mode === "exclude") return false;
+  if (override?.mode === "include") return true;
+  return baseTherapyApplies(normalized, date);
+}
+
+function effectiveTimesForDate(therapy, date) {
+  const normalized = normalizeTherapyRecord(therapy);
+  const override = getScheduleOverride(normalized.id, localDateISO(date));
+  if (override?.mode === "include" && override.times?.length) return override.times;
+  return normalizedTimes(normalized);
+}
+
 function therapyTodayReason(therapy, date = new Date()) {
   const normalized = normalizeTherapyRecord(therapy);
   const iso = localDateISO(date);
 
   if (normalized.archived) return { key: "archived", text: "Archiviata", detail: "La terapia è nell’archivio." };
   if (!normalized.active) return { key: "paused", text: "Sospesa", detail: "La terapia è sospesa." };
+  const manualOverride = getScheduleOverride(normalized.id, iso);
+  if (manualOverride?.mode === "exclude") {
+    return { key: "manual-off", text: "Tolto oggi", detail: "Rimosso manualmente dal calendario per oggi." };
+  }
+  if (manualOverride?.mode === "include") {
+    return { key: "manual-on", text: "Manuale oggi", detail: "Aggiunto o modificato manualmente dal calendario per oggi." };
+  }
   if (normalized.startDate && iso < normalized.startDate) {
     return { key: "future", text: "Non iniziata", detail: `Inizia il ${normalized.startDate.split("-").reverse().join("/")}.` };
   }
@@ -519,7 +593,7 @@ function dosesForDate(date = new Date()) {
   const iso = localDateISO(date);
   const regular = state.therapies
     .filter((therapy) => therapyApplies(therapy, date))
-    .flatMap((therapy) => normalizedTimes(therapy).map((time) => {
+    .flatMap((therapy) => effectiveTimesForDate(therapy, date).map((time) => {
       const log = state.logs.find((item) => item.therapyId === therapy.id && item.date === iso && item.time === time);
       const snooze = getSnooze(therapy.id, iso, time);
       return { therapy, time, originalDate: iso, log, snooze };
@@ -655,6 +729,147 @@ function monthStatistics(cursor = calendarCursor) {
   return { taken, skipped, missed, scheduled, adherence, worst };
 }
 
+
+function calendarTherapySummaries(date) {
+  const doses = scheduledDosesForDate(date);
+  const groups = new Map();
+  for (const dose of doses) {
+    const current = groups.get(dose.therapy.id) || { therapy: dose.therapy, times: [], doses: [] };
+    current.times.push(doseDisplayTime(dose));
+    current.doses.push(dose);
+    groups.set(dose.therapy.id, current);
+  }
+  return [...groups.values()].map((item) => ({
+    ...item,
+    times: [...new Set(item.times)].sort()
+  }));
+}
+
+function openCalendarDayDialog(dateIso) {
+  const date = parseIsoDateLocal(dateIso);
+  if (!date) return;
+  $("#calendarDayDate").value = dateIso;
+  $("#calendarDayTitle").textContent = new Intl.DateTimeFormat("it-IT", {
+    weekday: "long", day: "numeric", month: "long", year: "numeric"
+  }).format(date);
+  $("#calendarDaySubtitle").textContent = "Seleziona manualmente quali terapie devono comparire in questo giorno.";
+
+  const therapies = state.therapies
+    .filter((therapy) => !therapy.archived)
+    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "it"));
+
+  if (!therapies.length) {
+    $("#calendarDayTherapies").innerHTML = `<div class="empty-state"><p>Nessuna terapia disponibile.</p></div>`;
+  } else {
+    $("#calendarDayTherapies").innerHTML = therapies.map((therapy) => {
+      const normalized = normalizeTherapyRecord(therapy);
+      const baseScheduled = baseTherapyApplies(normalized, date);
+      const override = getScheduleOverride(normalized.id, dateIso);
+      const checked = normalized.active && !normalized.archived && (
+        override?.mode === "include" || (override?.mode !== "exclude" && baseScheduled)
+      );
+      const times = override?.mode === "include" && override.times?.length
+        ? override.times
+        : normalizedTimes(normalized);
+      const sourceText = override?.mode === "include"
+        ? "Impostazione manuale"
+        : override?.mode === "exclude"
+          ? "Tolto manualmente"
+          : baseScheduled
+            ? "Prevista dal programma"
+            : "Non prevista dal programma";
+      return `
+        <article class="calendar-day-therapy-row ${checked ? "selected" : ""}" data-calendar-therapy="${escapeHTML(normalized.id)}">
+          <div class="calendar-day-therapy-head">
+            <label class="calendar-day-toggle">
+              <input class="calendar-day-therapy-check" type="checkbox" data-id="${escapeHTML(normalized.id)}" ${checked ? "checked" : ""} ${normalized.active ? "" : "disabled"}>
+              <span></span>
+              <div>
+                <strong>${escapeHTML(normalized.name)}</strong>
+                <small>${escapeHTML(normalized.dose)}</small>
+              </div>
+            </label>
+            <button class="text-btn calendar-edit-full" data-action="edit-therapy-from-calendar" data-id="${escapeHTML(normalized.id)}" type="button">Modifica terapia</button>
+          </div>
+          <div class="calendar-day-source ${override ? "manual" : ""}">${escapeHTML(normalized.active ? sourceText : "Terapia sospesa")}</div>
+          <label class="calendar-time-label">Orari per questo giorno
+            <input class="calendar-day-times" data-id="${escapeHTML(normalized.id)}" type="text" inputmode="numeric"
+              value="${escapeHTML(times.join(", "))}" placeholder="08:00, 20:00" ${checked ? "" : "disabled"}>
+          </label>
+        </article>`;
+    }).join("");
+  }
+
+  $("#calendarDayDialog").showModal();
+}
+
+function closeCalendarDayDialog() {
+  if ($("#calendarDayDialog")?.open) $("#calendarDayDialog").close();
+}
+
+function saveCalendarDay(event) {
+  event.preventDefault();
+  const dateIso = $("#calendarDayDate").value;
+  const date = parseIsoDateLocal(dateIso);
+  if (!date) return showToast("Data non valida.");
+
+  const therapies = state.therapies.filter((therapy) => !therapy.archived);
+  for (const therapy of therapies) {
+    const normalized = normalizeTherapyRecord(therapy);
+    const check = $(`.calendar-day-therapy-check[data-id="${CSS.escape(normalized.id)}"]`);
+    const timeInput = $(`.calendar-day-times[data-id="${CSS.escape(normalized.id)}"]`);
+    if (!check) continue;
+
+    const baseScheduled = baseTherapyApplies(normalized, date);
+    const selected = check.checked && normalized.active;
+    const enteredTimes = parseManualTimes(timeInput?.value || "");
+    const baseTimes = normalizedTimes(normalized);
+
+    if (selected && !enteredTimes.length) {
+      timeInput?.focus();
+      return showToast(`Inserisci almeno un orario valido per ${normalized.name}.`);
+    }
+
+    removeScheduleOverride(normalized.id, dateIso);
+
+    if (!selected && baseScheduled) {
+      upsertScheduleOverride({
+        therapyId: normalized.id,
+        date: dateIso,
+        mode: "exclude",
+        times: [],
+        updatedAt: new Date().toISOString()
+      });
+    } else if (selected && (!baseScheduled || !sameTimes(enteredTimes, baseTimes))) {
+      upsertScheduleOverride({
+        therapyId: normalized.id,
+        date: dateIso,
+        mode: "include",
+        times: enteredTimes,
+        updatedAt: new Date().toISOString()
+      });
+    }
+  }
+
+  saveState();
+  closeCalendarDayDialog();
+  showToast("Programmazione del giorno aggiornata.");
+}
+
+function resetCalendarDay() {
+  const dateIso = $("#calendarDayDate").value;
+  if (!dateIso) return;
+  const countBefore = (state.scheduleOverrides || []).length;
+  state.scheduleOverrides = (state.scheduleOverrides || []).filter((item) => item.date !== dateIso);
+  if (state.scheduleOverrides.length === countBefore) {
+    showToast("Il giorno usa già il programma automatico.");
+  } else {
+    saveState();
+    showToast("Ripristinato il programma automatico.");
+  }
+  openCalendarDayDialog(dateIso);
+}
+
 function renderCalendar() {
   const grid = $("#calendarGrid");
   if (!grid) return;
@@ -677,7 +892,17 @@ function renderCalendar() {
     const cls = complete ? "complete" : problematic ? "partial" : future ? "future" : "";
     const todayClass = iso === localDateISO(now) ? " today" : "";
     const taken = doses.filter((d) => d.log?.status === "taken").length;
-    cells.push(`<div class="calendar-day ${cls}${todayClass}" title="${doses.length} dosi programmate"><span class="day-number">${day}</span>${doses.length ? `<span class="day-count">${taken}/${doses.length} prese</span>` : ""}</div>`);
+    const summaries = calendarTherapySummaries(date);
+    const preview = summaries.slice(0, 2).map((item) =>
+      `<span class="calendar-med">${escapeHTML(item.therapy.name)} <small>${escapeHTML(item.times.join(" · "))}</small></span>`
+    ).join("");
+    const extra = summaries.length > 2 ? `<span class="calendar-more">+${summaries.length - 2}</span>` : "";
+    const manual = (state.scheduleOverrides || []).some((item) => item.date === iso);
+    cells.push(`<button class="calendar-day ${cls}${todayClass}${manual ? " manual-day" : ""}" data-calendar-date="${iso}" type="button" title="${doses.length} dosi programmate">
+      <span class="calendar-day-top"><span class="day-number">${day}</span>${manual ? `<span class="manual-dot" title="Modificato manualmente">✎</span>` : ""}</span>
+      ${preview}${extra}
+      ${doses.length ? `<span class="day-count">${taken}/${doses.length}</span>` : `<span class="day-empty">—</span>`}
+    </button>`);
   }
   grid.innerHTML = cells.join("");
   const stats = monthStatistics(calendarCursor);
@@ -1126,11 +1351,14 @@ async function saveTherapy(event) {
   if (!therapy.name || !therapy.dose) return showToast("Compila nome e dose.");
 
   const duplicate = findDuplicateTherapy(therapy, oldId);
-  if (duplicate) {
-    const duplicateMessage = `La terapia “${duplicate.name}” è già presente con gli stessi giorni e gli stessi orari in un periodo sovrapposto. Non serve crearne una seconda copia. Apri “Modifica” sulla terapia esistente e, se deve essere ripetuta a cicli, scegli “Terapia ciclica”.`;
+  if (duplicate && !oldId) {
+    const duplicateMessage = `La terapia “${duplicate.name}” è già presente con gli stessi giorni e gli stessi orari in un periodo sovrapposto. Non serve crearne una seconda copia. Apri “Modifica” sulla terapia esistente oppure usa il Calendario per cambiare soltanto alcuni giorni.`;
     showToast("Terapia duplicata: salvataggio bloccato.");
     window.alert(duplicateMessage);
     return;
+  }
+  if (duplicate && oldId) {
+    console.warn("Modifica consentita nonostante una vecchia terapia sovrapposta", duplicate.id);
   }
 
   try {
@@ -1345,6 +1573,12 @@ function cloudPayload() {
     chatId: state.settings.chatId.trim(),
     timezone: state.settings.timezone.trim() || "Europe/Rome",
     enabled: !!state.settings.telegramEnabled,
+    scheduleOverrides: (state.scheduleOverrides || []).map((item) => ({
+      therapyId: item.therapyId,
+      date: item.date,
+      mode: item.mode,
+      times: Array.isArray(item.times) ? item.times : []
+    })),
     therapies: state.therapies
       .filter((therapy) => !therapy.archived)
       .map(({ id, name, dose, barcode, days, times, startDate, endDate, notes, monthInterval, scheduleType, cycleDurationDays, cycleIntervalMonths, cycleCount, active }) => ({
@@ -1479,9 +1713,9 @@ async function checkAndRepairTelegram({ sendTest = false, showMessage = true } =
     }
 
     const cronAge = Number(health.cronAgeMinutes);
-    if (!health.lastCronAt || !Number.isFinite(cronAge) || cronAge > 5) {
+    if (!health.lastCronAt || !Number.isFinite(cronAge) || cronAge > 20) {
       setTelegramHealthStatus("Cron da controllare", "warning", health.lastCronAt
-        ? `Ultimo controllo automatico ${Math.round(cronAge)} minuti fa. Il Cron dovrebbe essere impostato ogni minuto.`
+        ? `Ultimo controllo automatico ${Math.round(cronAge)} minuti fa. Il Cron è previsto ogni 15 minuti.`
         : "Il Worker non registra ancora esecuzioni del Cron Trigger. Verifica il Cron su Cloudflare.");
       if (showMessage) showToast("Telegram collegato, ma il Cron Cloudflare va controllato.");
       return false;
@@ -2553,11 +2787,33 @@ function bindEvents() {
   });
   $("#calendarPrevBtn")?.addEventListener("click", () => { calendarCursor = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() - 1, 1); renderCalendar(); });
   $("#calendarNextBtn")?.addEventListener("click", () => { calendarCursor = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() + 1, 1); renderCalendar(); });
+  $("#calendarDayForm")?.addEventListener("submit", saveCalendarDay);
+  $("#closeCalendarDayBtn")?.addEventListener("click", closeCalendarDayDialog);
+  $("#cancelCalendarDayBtn")?.addEventListener("click", closeCalendarDayDialog);
+  $("#resetCalendarDayBtn")?.addEventListener("click", resetCalendarDay);
+  $("#calendarDayTherapies")?.addEventListener("change", (event) => {
+    const check = event.target.closest(".calendar-day-therapy-check");
+    if (!check) return;
+    const row = check.closest(".calendar-day-therapy-row");
+    row?.classList.toggle("selected", check.checked);
+    const input = row?.querySelector(".calendar-day-times");
+    if (input) input.disabled = !check.checked;
+  });
 
   document.addEventListener("click", async (event) => {
+    const calendarDay = event.target.closest("[data-calendar-date]");
+    if (calendarDay) {
+      openCalendarDayDialog(calendarDay.dataset.calendarDate);
+      return;
+    }
     const button = event.target.closest("[data-action]");
     if (!button) return;
     const { action, id, time, date, minutes } = button.dataset;
+    if (action === "edit-therapy-from-calendar") {
+      closeCalendarDayDialog();
+      setTimeout(() => openTherapyDialog(id), 30);
+      return;
+    }
     if (action === "mark-taken") markDose(id, time, "taken", date || localDateISO());
     if (action === "mark-skipped") markDose(id, time, "skipped", date || localDateISO());
     if (action === "reset-dose") resetDose(id, time, date || localDateISO());
@@ -2569,6 +2825,7 @@ function bindEvents() {
       if (therapy && confirm(`Rimuovere la copia duplicata “${therapy.name}”? Verrà eliminata da tutte le giornate future e saranno rimossi anche gli eventuali eventi registrati per questa copia.`)) {
         state.therapies = state.therapies.filter((item) => item.id !== id);
         state.logs = state.logs.filter((log) => log.therapyId !== id);
+        state.scheduleOverrides = (state.scheduleOverrides || []).filter((item) => item.therapyId !== id);
         try {
           await deleteTherapyImage(id);
         } catch (error) {
@@ -2611,6 +2868,7 @@ function bindEvents() {
       const therapy = state.therapies.find((item) => item.id === id);
       if (therapy && confirm(`Eliminare definitivamente “${therapy.name}”? Questa operazione non può essere annullata. Lo storico delle assunzioni resterà comunque disponibile.`)) {
         state.therapies = state.therapies.filter((item) => item.id !== id);
+        state.scheduleOverrides = (state.scheduleOverrides || []).filter((item) => item.therapyId !== id);
         deleteTherapyImage(id).catch(console.error);
         replaceTherapyImageUrl(id, null);
         saveState();
@@ -2696,6 +2954,7 @@ function bindEvents() {
 async function init() {
   // v22: normalizza i dati provenienti da vecchi backup/versioni.
   state.therapies = (state.therapies || []).map(normalizeTherapyRecord);
+  state.scheduleOverrides = (state.scheduleOverrides || []).map(normalizeScheduleOverride).filter(Boolean);
   bindEvents();
   await loadTherapyImages();
   // Libera automaticamente eventuali dati pesanti lasciati dalle vecchie versioni.

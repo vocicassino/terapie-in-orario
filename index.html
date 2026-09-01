@@ -8,7 +8,7 @@
   <title>Terapie in Orario</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=24">
+  <link rel="stylesheet" href="styles.css?v=26">
 </head>
 <body>
   <header class="app-header">
@@ -104,6 +104,7 @@
       </div>
       <div class="calendar-weekdays"><span>Lun</span><span>Mar</span><span>Mer</span><span>Gio</span><span>Ven</span><span>Sab</span><span>Dom</span></div>
       <div id="calendarGrid" class="calendar-grid"></div>
+      <p class="calendar-help"><strong>Tocca un giorno</strong> per vedere tutte le terapie previste e modificare manualmente quel giorno senza cambiare il programma generale.</p>
       <article id="worstTherapyCard" class="settings-card hidden"></article>
     </section>
 
@@ -416,6 +417,29 @@
     </form>
   </dialog>
 
+  <dialog id="calendarDayDialog" class="calendar-day-dialog">
+    <form id="calendarDayForm" method="dialog">
+      <div class="dialog-header">
+        <div>
+          <p class="eyebrow">Programmazione manuale</p>
+          <h2 id="calendarDayTitle">Terapie del giorno</h2>
+          <p id="calendarDaySubtitle" class="small-note"></p>
+        </div>
+        <button id="closeCalendarDayBtn" class="icon-btn" type="button" aria-label="Chiudi">×</button>
+      </div>
+      <input id="calendarDayDate" type="hidden">
+      <div id="calendarDayTherapies" class="calendar-day-therapy-list"></div>
+      <div class="manual-day-help">
+        Le modifiche fatte qui valgono <strong>solo per il giorno selezionato</strong>. Il programma generale della terapia resta invariato.
+      </div>
+      <div class="dialog-actions calendar-day-actions">
+        <button id="resetCalendarDayBtn" class="secondary" type="button">Ripristina automatico</button>
+        <button id="cancelCalendarDayBtn" class="secondary" type="button">Annulla</button>
+        <button class="primary" type="submit">Salva giorno</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="scannerDialog">
     <div class="scanner-box">
       <div class="dialog-header">
@@ -435,6 +459,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="app.js?v=24"></script>
+  <script src="app.js?v=26"></script>
 </body>
 </html>
