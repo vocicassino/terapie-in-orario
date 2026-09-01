@@ -70,3 +70,14 @@ e sostituire l'espressione precedente con:
 
 `* * * * *`
 
+
+
+## v22 – correzione terapie di oggi
+
+- Normalizzazione automatica dei giorni provenienti da vecchi backup/versioni (anche se salvati come testo).
+- La schermata Oggi usa giorni e orari normalizzati.
+- Dopo un ripristino, le terapie vengono normalizzate prima del rendering.
+- Nella lista Terapie lo stato non mostra più genericamente “Attiva” quando la terapia è già terminata.
+- Sono mostrati motivi chiari: “Terminata”, “Non iniziata”, “Pausa mensile”, oppure “Oggi”.
+- Se la data fine è trascorsa, viene indicato di usare “Ripeti” per impostarla nuovamente.
+- Nessuna modifica richiesta al Worker Cloudflare rispetto alla v21.

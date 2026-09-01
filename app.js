@@ -48,6 +48,44 @@ let deviceSyncInFlight = false;
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 
+
+function normalizeTherapyRecord(therapy = {}) {
+  const days = [...new Set(
+    (Array.isArray(therapy.days) ? therapy.days : [])
+      .map(Number)
+      .filter((day) => Number.isInteger(day) && day >= 0 && day <= 6)
+  )].sort((a, b) => a - b);
+
+  const times = [...new Set(
+    (Array.isArray(therapy.times) ? therapy.times : [])
+      .map((time) => String(time || "").trim())
+      .filter((time) => /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time))
+  )].sort();
+
+  const normalizeDate = (value) => {
+    const text = String(value || "").trim();
+    return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : "";
+  };
+
+  return {
+    ...therapy,
+    id: String(therapy.id || ""),
+    name: String(therapy.name || ""),
+    dose: String(therapy.dose || ""),
+    days,
+    times,
+    startDate: normalizeDate(therapy.startDate),
+    endDate: normalizeDate(therapy.endDate),
+    active: therapy.active !== false,
+    archived: therapy.archived === true,
+    archivedAt: therapy.archivedAt || "",
+    monthInterval: Math.max(1, Number.parseInt(therapy.monthInterval || 1, 10) || 1),
+    stockUnits: therapy.stockUnits === "" || therapy.stockUnits == null ? "" : Math.max(0, Number(therapy.stockUnits) || 0),
+    doseUnits: Math.max(0.1, Number(therapy.doseUnits) || 1),
+    lowStockThreshold: Math.max(0, Number(therapy.lowStockThreshold) || 5)
+  };
+}
+
 function loadState() {
   try {
     const keys = [STORAGE_KEY, ...LEGACY_STORAGE_KEYS];
@@ -63,17 +101,7 @@ function loadState() {
     return {
       ...structuredClone(defaultState),
       ...parsed,
-      therapies: Array.isArray(parsed.therapies)
-        ? parsed.therapies.map((therapy) => ({
-            ...therapy,
-            archived: therapy.archived === true,
-            archivedAt: therapy.archivedAt || "",
-            monthInterval: Math.max(1, Number.parseInt(therapy.monthInterval || 1, 10) || 1),
-            stockUnits: therapy.stockUnits === "" || therapy.stockUnits == null ? "" : Math.max(0, Number(therapy.stockUnits) || 0),
-            doseUnits: Math.max(0.1, Number(therapy.doseUnits) || 1),
-            lowStockThreshold: Math.max(0, Number(therapy.lowStockThreshold) || 5)
-          }))
-        : [],
+      therapies: Array.isArray(parsed.therapies) ? parsed.therapies.map(normalizeTherapyRecord) : [],
       snoozes: Array.isArray(parsed.snoozes) ? parsed.snoozes : [],
       settings: { ...defaultState.settings, ...(parsed.settings || {}) }
     };
@@ -340,19 +368,44 @@ function todayDoseDuplicateKey(dose) {
 }
 
 function therapyApplies(therapy, date) {
-  if (therapy.archived || !therapy.active) return false;
+  const normalized = normalizeTherapyRecord(therapy);
+  if (normalized.archived || !normalized.active) return false;
   const iso = localDateISO(date);
-  if (therapy.startDate && iso < therapy.startDate) return false;
-  if (therapy.endDate && iso > therapy.endDate) return false;
-  if (!monthIntervalApplies(therapy, date)) return false;
-  return therapy.days.includes(date.getDay());
+  if (normalized.startDate && iso < normalized.startDate) return false;
+  if (normalized.endDate && iso > normalized.endDate) return false;
+  if (!monthIntervalApplies(normalized, date)) return false;
+  return normalized.days.includes(date.getDay());
+}
+
+function therapyTodayReason(therapy, date = new Date()) {
+  const normalized = normalizeTherapyRecord(therapy);
+  const iso = localDateISO(date);
+
+  if (normalized.archived) return { key: "archived", text: "Archiviata", detail: "La terapia è nell’archivio." };
+  if (!normalized.active) return { key: "paused", text: "Sospesa", detail: "La terapia è sospesa." };
+  if (normalized.startDate && iso < normalized.startDate) {
+    return { key: "future", text: "Non iniziata", detail: `Inizia il ${normalized.startDate.split("-").reverse().join("/")}.` };
+  }
+  if (normalized.endDate && iso > normalized.endDate) {
+    return { key: "ended", text: "Terminata", detail: `Data fine ${normalized.endDate.split("-").reverse().join("/")}. Usa “Ripeti” per impostarla nuovamente.` };
+  }
+  if (!monthIntervalApplies(normalized, date)) {
+    return { key: "offmonth", text: "Pausa mensile", detail: "La periodicità a mesi alterni esclude il mese corrente." };
+  }
+  if (!normalized.days.includes(date.getDay())) {
+    return { key: "not-today", text: "Attiva", detail: "Oggi non è tra i giorni selezionati." };
+  }
+  if (!normalized.times.length) {
+    return { key: "no-time", text: "Da correggere", detail: "Non è presente alcun orario valido." };
+  }
+  return { key: "today", text: "Oggi", detail: "È programmata per oggi." };
 }
 
 function dosesForDate(date = new Date()) {
   const iso = localDateISO(date);
   const regular = state.therapies
     .filter((therapy) => therapyApplies(therapy, date))
-    .flatMap((therapy) => therapy.times.map((time) => {
+    .flatMap((therapy) => normalizedTimes(therapy).map((time) => {
       const log = state.logs.find((item) => item.therapyId === therapy.id && item.date === iso && item.time === time);
       const snooze = getSnooze(therapy.id, iso, time);
       return { therapy, time, originalDate: iso, log, snooze };
@@ -616,7 +669,11 @@ function therapyCardHtml(therapy, { archived = false } = {}) {
             <p class="muted">${escapeHTML(therapy.dose)}</p>
           </div>
         </div>
-        <span class="status-pill ${archived ? "archived" : therapy.active ? "active" : "paused"}">${archived ? "Archiviata" : therapy.active ? "Attiva" : "Sospesa"}</span>
+        ${(() => {
+          const todayState = therapyTodayReason(therapy);
+          const cls = archived ? "archived" : todayState.key === "today" ? "active" : todayState.key === "ended" ? "ended" : todayState.key === "paused" ? "paused" : "scheduled";
+          return `<span class="status-pill ${cls}">${escapeHTML(archived ? "Archiviata" : todayState.text)}</span>`;
+        })()}
       </div>
       <div class="therapy-card-body">
         <div class="therapy-times">${therapy.times.map((time) => `<span class="chip time-chip">${escapeHTML(time)}</span>`).join("")}</div>
@@ -628,6 +685,12 @@ function therapyCardHtml(therapy, { archived = false } = {}) {
         </div>
         ${isLowStock(therapy) ? `<div class="stock-warning">⚠️ Scorta bassa: valuta il rifornimento.</div>` : ""}
         ${therapy.notes ? `<p class="therapy-note">${escapeHTML(therapy.notes)}</p>` : ""}
+        ${!archived ? (() => {
+          const todayState = therapyTodayReason(therapy);
+          return todayState.key === "today"
+            ? `<p class="today-schedule-note">✓ Prevista oggi</p>`
+            : `<p class="schedule-explanation">${escapeHTML(todayState.detail)}</p>`;
+        })() : ""}
         ${archivedDate ? `<p class="small-note">Archiviata il ${escapeHTML(archivedDate)}</p>` : ""}
       </div>
       <div class="card-menu modern-card-menu">
@@ -795,7 +858,7 @@ async function openTherapyDialog(id = "") {
   removeCurrentTherapyImage = false;
   updateTherapyImagePreview(therapy ? (therapyImageUrls.get(therapy.id) || "") : "");
   $$("input[name='days']").forEach((input) => {
-    input.checked = therapy ? therapy.days.includes(Number(input.value)) : true;
+    input.checked = therapy ? normalizedDays(therapy).includes(Number(input.value)) : true;
   });
   (therapy?.times || ["08:00"]).forEach(addTimeInput);
   $("#therapyDialog").showModal();
@@ -1423,9 +1486,7 @@ async function restoreBackupPackage(packageData, { preserveConnection = false } 
   await clearTherapyImages();
 
   const restoredTherapies = imported.therapies.map((therapy) => ({
-    ...therapy,
-    archived: therapy.archived === true,
-    archivedAt: therapy.archivedAt || "",
+    ...normalizeTherapyRecord(therapy),
     hasImage: false
   }));
 
@@ -2490,6 +2551,8 @@ function bindEvents() {
 }
 
 async function init() {
+  // v22: normalizza i dati provenienti da vecchi backup/versioni.
+  state.therapies = (state.therapies || []).map(normalizeTherapyRecord);
   bindEvents();
   await loadTherapyImages();
   // Libera automaticamente eventuali dati pesanti lasciati dalle vecchie versioni.

@@ -618,3 +618,23 @@ input,textarea,select { border-radius:13px; background:#fff; }
 #telegramHealthStatus.error { background:#fee2e2; color:#922f2f; }
 #telegramHealthStatus.syncing { background:#e1f1fa; color:#275e80; }
 @media (max-width:480px){ .telegram-health-row{align-items:stretch}.telegram-health-row .secondary{width:100%}#telegramHealthStatus{text-align:center} }
+
+
+/* v22 - stato reale della programmazione */
+.status-pill.ended { background:#f5e6e6; color:#8b3434; }
+.status-pill.scheduled { background:#eef4f2; color:#5f746e; }
+.schedule-explanation {
+  margin:10px 0 0;
+  padding:9px 11px;
+  border-radius:11px;
+  background:#f7f9f8;
+  color:var(--muted);
+  font-size:.84rem;
+  line-height:1.35;
+}
+.today-schedule-note {
+  margin:10px 0 0;
+  color:var(--primary);
+  font-size:.84rem;
+  font-weight:800;
+}
