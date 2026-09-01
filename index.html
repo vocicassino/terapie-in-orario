@@ -8,7 +8,7 @@
   <title>Terapie in Orario</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=26">
+  <link rel="stylesheet" href="styles.css?v=27">
 </head>
 <body>
   <header class="app-header">
@@ -87,25 +87,64 @@
     <section id="view-calendar" class="view" aria-labelledby="calendarTitle">
       <div class="section-heading">
         <div>
-          <p class="eyebrow">Andamento</p>
-          <h2 id="calendarTitle">Calendario e statistiche</h2>
+          <p class="eyebrow">Programmazione</p>
+          <h2 id="calendarTitle">Calendario terapie</h2>
         </div>
       </div>
-      <div class="calendar-toolbar">
-        <button id="calendarPrevBtn" class="secondary" type="button" aria-label="Mese precedente">‹</button>
-        <strong id="calendarMonthLabel">Mese</strong>
-        <button id="calendarNextBtn" class="secondary" type="button" aria-label="Mese successivo">›</button>
+
+      <article class="calendar-planner-card">
+        <label class="calendar-medicine-label">1. Scegli il medicinale
+          <select id="calendarTherapySelect"></select>
+        </label>
+        <div class="calendar-selected-actions">
+          <button id="calendarEditTherapyBtn" class="secondary" type="button">Modifica medicinale</button>
+          <button id="calendarAddTherapyBtn" class="secondary" type="button">+ Nuovo medicinale</button>
+        </div>
+        <div class="calendar-mode-box">
+          <div>
+            <span class="small-note">Modalità</span>
+            <strong id="calendarModeText">Programma automatico</strong>
+            <p id="calendarModeHelp" class="small-note">Puoi aggiungere o togliere singoli giorni come eccezioni.</p>
+          </div>
+          <button id="calendarManualModeBtn" class="secondary" type="button">Usa solo giorni scelti</button>
+        </div>
+      </article>
+
+      <div class="calendar-month-toolbar">
+        <button id="calendarPrevBtn" class="calendar-arrow" type="button" aria-label="Mese precedente">‹</button>
+        <button id="calendarTodayBtn" class="calendar-month-title" type="button">
+          <strong id="calendarMonthLabel">Mese</strong>
+          <span>Vai a oggi</span>
+        </button>
+        <button id="calendarNextBtn" class="calendar-arrow" type="button" aria-label="Mese successivo">›</button>
       </div>
-      <div id="statsGrid" class="stats-grid"></div>
-      <div class="calendar-legend">
-        <span><i class="legend-dot complete"></i> Completato</span>
-        <span><i class="legend-dot partial"></i> Incompleto / saltato</span>
-        <span><i class="legend-dot future"></i> Programmato</span>
+
+      <div class="calendar-selection-legend">
+        <span><i class="calendar-key selected"></i> Giorno impostato</span>
+        <span><i class="calendar-key manual"></i> Modifica manuale</span>
+        <span><i class="calendar-key today"></i> Oggi</span>
       </div>
+
       <div class="calendar-weekdays"><span>Lun</span><span>Mar</span><span>Mer</span><span>Gio</span><span>Ven</span><span>Sab</span><span>Dom</span></div>
-      <div id="calendarGrid" class="calendar-grid"></div>
-      <p class="calendar-help"><strong>Tocca un giorno</strong> per vedere tutte le terapie previste e modificare manualmente quel giorno senza cambiare il programma generale.</p>
-      <article id="worstTherapyCard" class="settings-card hidden"></article>
+      <div id="calendarGrid" class="calendar-grid calendar-picker-grid"></div>
+
+      <article id="calendarSelectedSummary" class="calendar-selected-summary">
+        <strong>Seleziona un medicinale</strong>
+        <p>Scegli il farmaco in alto e tocca i giorni del calendario.</p>
+      </article>
+
+      <p class="calendar-help"><strong>Come si usa:</strong> scegli prima il medicinale, poi tocca direttamente i giorni in cui devi assumerlo. Usa le frecce o scorri lateralmente per passare ai mesi precedenti e successivi.</p>
+
+      <details class="calendar-stats-details">
+        <summary>Statistiche del mese</summary>
+        <div id="statsGrid" class="stats-grid"></div>
+        <div class="calendar-legend">
+          <span><i class="legend-dot complete"></i> Completato</span>
+          <span><i class="legend-dot partial"></i> Incompleto / saltato</span>
+          <span><i class="legend-dot future"></i> Programmato</span>
+        </div>
+        <article id="worstTherapyCard" class="settings-card hidden"></article>
+      </details>
     </section>
 
     <section id="view-history" class="view" aria-labelledby="historyTitle">
@@ -333,7 +372,7 @@
         <p class="small-note">Puoi caricare una foto del farmaco oppure usare la scansione del codice a barre. La scansione registra il codice; il recupero automatico dell'immagine da cataloghi esterni potrà essere aggiunto in un secondo momento.</p>
       </fieldset>
 
-      <fieldset>
+      <fieldset id="weekdayFields">
         <legend>Giorni della settimana *</legend>
         <div class="days-grid">
           <label><input type="checkbox" name="days" value="1" checked><span>Lun</span></label>
@@ -356,10 +395,11 @@
         <select id="scheduleType">
           <option value="standard">Periodo normale</option>
           <option value="cyclic">Terapia ciclica</option>
+          <option value="manual">Calendario manuale</option>
         </select>
       </label>
 
-      <div class="two-cols">
+      <div id="dateRangeFields" class="two-cols">
         <label>Data inizio
           <input id="startDate" type="date">
         </label>
@@ -400,6 +440,11 @@
         <p id="cyclePreview" class="cycle-preview"></p>
         <p class="small-note">Esempio: 14 giorni, ogni 2 mesi, per 3 cicli = 14 giorni nel mese iniziale, 14 giorni due mesi dopo e 14 giorni altri due mesi dopo.</p>
       </fieldset>
+
+      <div id="manualScheduleNote" class="manual-schedule-note hidden">
+        <strong>Calendario manuale</strong>
+        <p>Salva il medicinale, poi apri <strong>Calendario</strong>, selezionalo e tocca direttamente i giorni dei vari mesi in cui devi assumerlo.</p>
+      </div>
 
       <label>Note
         <textarea id="therapyNotes" rows="3" maxlength="250" placeholder="Esempio: dopo colazione"></textarea>
@@ -459,6 +504,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="app.js?v=26"></script>
+  <script src="app.js?v=27"></script>
 </body>
 </html>

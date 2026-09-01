@@ -150,3 +150,27 @@ La diagnostica Telegram considera normale un'ultima esecuzione del Cron
 entro 20 minuti.
 
 Se vuoi mantenere il consumo Cloudflare ridotto, non usare il Cron ogni minuto.
+
+
+## v27 – calendario centrato sul medicinale
+
+Nuovo flusso:
+1. Apri Calendario.
+2. Scegli il medicinale dal menu.
+3. Tocca direttamente i giorni del mese in cui devi assumerlo.
+4. Usa le frecce oppure uno swipe laterale per cambiare mese.
+5. Il medicinale resta selezionato mentre passi da un mese all'altro.
+
+Sono disponibili due modalità:
+- Programma automatico/ciclico + eccezioni manuali.
+- Calendario manuale: il farmaco compare SOLO nei giorni scelti nel calendario.
+
+Nel modulo Aggiungi/Modifica è stata aggiunta anche la voce:
+`Calendario manuale`.
+
+Il calendario non riempie più ogni casella con i nomi di tutte le terapie:
+mostra invece chiaramente i giorni del medicinale selezionato, con spunta verde.
+Le statistiche generali sono spostate in una sezione richiudibile.
+
+Telegram e Cloudflare rispettano anche il calendario manuale.
+Cron consigliato: `*/15 * * * *`.

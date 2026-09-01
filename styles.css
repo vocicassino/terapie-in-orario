@@ -840,3 +840,314 @@ input,textarea,select { border-radius:13px; background:#fff; }
   .calendar-edit-full { margin-left:37px; }
   .calendar-day-actions > button { flex:1 1 45%; }
 }
+
+
+/* ===== v27 calendario: prima medicinale, poi giorni ===== */
+.calendar-planner-card {
+  margin: 12px 0 16px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: #fff;
+  box-shadow: 0 10px 30px rgba(23, 51, 46, .05);
+}
+.calendar-medicine-label {
+  margin: 0 !important;
+  font-weight: 900;
+}
+.calendar-medicine-label select {
+  margin-top: 8px;
+  font-size: 1rem;
+  font-weight: 800;
+}
+.calendar-selected-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.calendar-selected-actions button {
+  flex: 1 1 180px;
+}
+.calendar-mode-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 15px;
+  background: var(--soft);
+}
+.calendar-mode-box > div {
+  min-width: 0;
+}
+.calendar-mode-box strong {
+  display: block;
+  margin-top: 2px;
+}
+.calendar-mode-box p {
+  margin: 4px 0 0;
+}
+.calendar-mode-box button {
+  flex: 0 0 auto;
+  max-width: 220px;
+}
+
+.calendar-month-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: grid;
+  grid-template-columns: 54px 1fr 54px;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 10px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: rgba(248, 252, 251, .96);
+  backdrop-filter: blur(8px);
+}
+.calendar-arrow {
+  display: grid;
+  place-items: center;
+  min-height: 48px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--soft);
+  color: var(--primary);
+  font-size: 2rem;
+  font-weight: 700;
+}
+.calendar-month-title {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-align: center;
+  padding: 4px 8px;
+}
+.calendar-month-title strong {
+  display: block;
+  text-transform: capitalize;
+  font-size: 1.12rem;
+}
+.calendar-month-title span {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: .68rem;
+  font-weight: 700;
+}
+
+.calendar-selection-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin: 10px 2px 12px;
+  color: var(--muted);
+  font-size: .74rem;
+}
+.calendar-selection-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.calendar-key {
+  width: 13px;
+  height: 13px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: #fff;
+}
+.calendar-key.selected {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+.calendar-key.manual {
+  background: #fff1bd;
+  border-color: #e7cf77;
+}
+.calendar-key.today {
+  border: 2px solid var(--primary);
+}
+
+.calendar-picker-grid .therapy-picker-day {
+  min-height: 96px;
+  padding: 7px 5px;
+  display: grid;
+  grid-template-rows: auto 1fr auto auto;
+  align-items: center;
+  justify-items: center;
+  text-align: center;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #fff;
+  color: var(--text);
+  transition: transform .08s ease, background .12s ease, border-color .12s ease;
+}
+.calendar-picker-grid .therapy-picker-day:active {
+  transform: scale(.97);
+}
+.calendar-picker-grid .therapy-picker-day.therapy-date-selected {
+  background: #e8f7f2;
+  border-color: #66b6a3;
+  box-shadow: inset 0 0 0 1px #8bcbbb;
+}
+.calendar-picker-grid .therapy-picker-day.today {
+  outline: 3px solid rgba(15,118,101,.18);
+  outline-offset: 1px;
+}
+.calendar-picker-grid .therapy-picker-day.therapy-date-manual {
+  border-color: #d9b84e;
+}
+.picker-day-number {
+  justify-self: start;
+  font-size: .98rem;
+  font-weight: 900;
+}
+.picker-check {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  color: #fff;
+  background: transparent;
+  font-size: 1.1rem;
+  font-weight: 900;
+}
+.therapy-date-selected .picker-check {
+  background: var(--primary);
+}
+.picker-time {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--primary-dark);
+  font-size: .58rem;
+  font-weight: 900;
+}
+.picker-total {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: .54rem;
+  font-weight: 700;
+}
+.picker-manual-mark {
+  position: absolute;
+  margin-top: -82px;
+  margin-left: 38px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #fff1bd;
+  color: #765b00;
+  font-size: .6rem;
+  font-weight: 900;
+}
+.calendar-picker-grid .therapy-picker-day {
+  position: relative;
+}
+
+.calendar-selected-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 16px;
+  background: #f7faf9;
+  border: 1px solid var(--border);
+}
+.calendar-selected-summary p {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+.calendar-summary-numbers {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.calendar-summary-numbers > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid var(--border);
+  font-size: .68rem;
+}
+.calendar-summary-numbers .summary-mode {
+  color: var(--primary);
+  font-weight: 900;
+}
+.calendar-stats-details {
+  margin-top: 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 15px;
+  background: #fff;
+}
+.calendar-stats-details summary {
+  cursor: pointer;
+  color: var(--primary);
+  font-weight: 900;
+}
+.manual-schedule-note {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #eaf7f3;
+  border: 1px solid #b8ddd3;
+}
+.manual-schedule-note p {
+  margin: 5px 0 0;
+  color: var(--muted);
+}
+
+@media (max-width: 560px) {
+  .calendar-mode-box {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .calendar-mode-box button {
+    width: 100%;
+    max-width: none;
+  }
+  .calendar-picker-grid .therapy-picker-day {
+    min-height: 78px;
+    padding: 5px 2px;
+    border-radius: 11px;
+  }
+  .picker-check {
+    width: 26px;
+    height: 26px;
+  }
+  .picker-time {
+    font-size: .5rem;
+  }
+  .picker-total {
+    font-size: .47rem;
+  }
+  .picker-manual-mark {
+    margin-top: -65px;
+    margin-left: 29px;
+  }
+  .calendar-selected-summary {
+    flex-direction: column;
+  }
+  .calendar-summary-numbers {
+    justify-content: flex-start;
+  }
+}

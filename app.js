@@ -45,6 +45,8 @@ let autoBackupDirty = false;
 let autoBackupSuspended = false;
 let calendarCursor = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
 let deviceSyncInFlight = false;
+let selectedCalendarTherapyId = "";
+let calendarSwipeStartX = null;
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -81,7 +83,7 @@ function normalizeTherapyRecord(therapy = {}) {
     archived: therapy.archived === true,
     archivedAt: therapy.archivedAt || "",
     monthInterval: Math.max(1, Number.parseInt(therapy.monthInterval || 1, 10) || 1),
-    scheduleType: therapy.scheduleType === "cyclic" ? "cyclic" : "standard",
+    scheduleType: therapy.scheduleType === "manual" ? "manual" : therapy.scheduleType === "cyclic" ? "cyclic" : "standard",
     cycleDurationDays: Math.max(1, Number.parseInt(therapy.cycleDurationDays || 14, 10) || 14),
     cycleIntervalMonths: Math.max(1, Number.parseInt(therapy.cycleIntervalMonths || 2, 10) || 2),
     cycleCount: Math.max(1, Number.parseInt(therapy.cycleCount || 3, 10) || 3),
@@ -362,8 +364,12 @@ function formatShortIso(iso) {
 function updateCycleFields() {
   const type = $("#scheduleType")?.value || "standard";
   const cyclic = type === "cyclic";
+  const manual = type === "manual";
   $("#cycleFields")?.classList.toggle("hidden", !cyclic);
-  $("#standardScheduleFields")?.classList.toggle("hidden", cyclic);
+  $("#standardScheduleFields")?.classList.toggle("hidden", cyclic || manual);
+  $("#weekdayFields")?.classList.toggle("hidden", manual);
+  $("#dateRangeFields")?.classList.toggle("hidden", manual);
+  $("#manualScheduleNote")?.classList.toggle("hidden", !manual);
 
   const endInput = $("#endDate");
   const endLabel = $("#endDateLabel");
@@ -372,6 +378,7 @@ function updateCycleFields() {
     endLabel.childNodes[0].textContent = cyclic ? "Fine complessiva (automatica) " : "Data fine ";
   }
 
+  if (manual) return;
   if (!cyclic) return;
 
   const draft = {
@@ -511,6 +518,7 @@ function todayDoseDuplicateKey(dose) {
 function baseTherapyApplies(therapy, date) {
   const normalized = normalizeTherapyRecord(therapy);
   if (normalized.archived || !normalized.active) return false;
+  if (normalized.scheduleType === "manual") return false;
   const iso = localDateISO(date);
   if (normalized.startDate && iso < normalized.startDate) return false;
   if (normalized.scheduleType === "cyclic") {
@@ -553,6 +561,9 @@ function therapyTodayReason(therapy, date = new Date()) {
   }
   if (manualOverride?.mode === "include") {
     return { key: "manual-on", text: "Manuale oggi", detail: "Aggiunto o modificato manualmente dal calendario per oggi." };
+  }
+  if (normalized.scheduleType === "manual") {
+    return { key: "manual-off", text: "Non selezionata", detail: "Questa terapia usa il calendario manuale e oggi non è stato selezionato." };
   }
   if (normalized.startDate && iso < normalized.startDate) {
     return { key: "future", text: "Non iniziata", detail: `Inizia il ${normalized.startDate.split("-").reverse().join("/")}.` };
@@ -870,41 +881,272 @@ function resetCalendarDay() {
   openCalendarDayDialog(dateIso);
 }
 
+function availableCalendarTherapies() {
+  return (state.therapies || [])
+    .filter((therapy) => !therapy.archived)
+    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "it"));
+}
+
+function selectedCalendarTherapy() {
+  const therapies = availableCalendarTherapies();
+  if (!therapies.length) {
+    selectedCalendarTherapyId = "";
+    return null;
+  }
+  if (!therapies.some((therapy) => therapy.id === selectedCalendarTherapyId)) {
+    selectedCalendarTherapyId = therapies.find((therapy) => therapy.active)?.id || therapies[0].id;
+  }
+  return therapies.find((therapy) => therapy.id === selectedCalendarTherapyId) || therapies[0];
+}
+
+function renderCalendarTherapyPicker() {
+  const select = $("#calendarTherapySelect");
+  if (!select) return null;
+  const therapies = availableCalendarTherapies();
+  const selected = selectedCalendarTherapy();
+
+  if (!therapies.length) {
+    select.innerHTML = `<option value="">Nessuna terapia</option>`;
+    select.disabled = true;
+    $("#calendarEditTherapyBtn").disabled = true;
+    $("#calendarManualModeBtn").disabled = true;
+    return null;
+  }
+
+  select.disabled = false;
+  const nameCounts = new Map();
+  therapies.forEach((therapy) => {
+    const key = `${normalizeTherapyText(therapy.name)}|${normalizeTherapyText(therapy.dose)}`;
+    nameCounts.set(key, (nameCounts.get(key) || 0) + 1);
+  });
+  const seen = new Map();
+
+  select.innerHTML = therapies.map((therapy) => {
+    const key = `${normalizeTherapyText(therapy.name)}|${normalizeTherapyText(therapy.dose)}`;
+    const total = nameCounts.get(key) || 1;
+    const current = (seen.get(key) || 0) + 1;
+    seen.set(key, current);
+    const copy = total > 1 ? ` · copia ${current}` : "";
+    const paused = therapy.active ? "" : " · sospesa";
+    const times = normalizedTimes(therapy).length ? ` · ${normalizedTimes(therapy).join(", ")}` : "";
+    return `<option value="${escapeHTML(therapy.id)}">${escapeHTML(therapy.name)} — ${escapeHTML(therapy.dose)}${escapeHTML(times)}${escapeHTML(copy)}${escapeHTML(paused)}</option>`;
+  }).join("");
+
+  select.value = selected?.id || therapies[0].id;
+  selectedCalendarTherapyId = select.value;
+  $("#calendarEditTherapyBtn").disabled = !selected;
+  $("#calendarManualModeBtn").disabled = !selected || !selected.active;
+  return selected;
+}
+
+function updateCalendarModeInfo(therapy) {
+  const modeText = $("#calendarModeText");
+  const modeHelp = $("#calendarModeHelp");
+  const modeButton = $("#calendarManualModeBtn");
+  if (!modeText || !modeHelp || !modeButton) return;
+
+  if (!therapy) {
+    modeText.textContent = "Nessun medicinale";
+    modeHelp.textContent = "Aggiungi prima una terapia.";
+    modeButton.textContent = "Usa solo giorni scelti";
+    return;
+  }
+
+  const normalized = normalizeTherapyRecord(therapy);
+  if (!normalized.active) {
+    modeText.textContent = "Terapia sospesa";
+    modeHelp.textContent = "Riattivala da Modifica medicinale prima di programmare i giorni.";
+    modeButton.textContent = "Terapia sospesa";
+    return;
+  }
+
+  if (normalized.scheduleType === "manual") {
+    modeText.textContent = "Solo giorni scelti manualmente";
+    modeHelp.textContent = "Il medicinale compare soltanto nei giorni che tocchi nel calendario.";
+    modeButton.textContent = "Torna al programma automatico";
+  } else {
+    modeText.textContent = normalized.scheduleType === "cyclic" ? "Programma ciclico + modifiche manuali" : "Programma automatico + modifiche manuali";
+    modeHelp.textContent = "I giorni previsti dal programma sono già selezionati; puoi toccarli per toglierli o aggiungerne altri.";
+    modeButton.textContent = "Usa solo giorni scelti";
+  }
+}
+
+function calendarSelectedDateState(therapy, date) {
+  const iso = localDateISO(date);
+  const override = therapy ? getScheduleOverride(therapy.id, iso) : null;
+  const selected = therapy ? therapyApplies(therapy, date) : false;
+  return { selected, override };
+}
+
+function toggleSelectedTherapyDate(dateIso) {
+  const therapy = selectedCalendarTherapy();
+  if (!therapy) return showToast("Seleziona prima un medicinale.");
+  const normalized = normalizeTherapyRecord(therapy);
+  if (!normalized.active) return showToast("Questa terapia è sospesa. Riattivala prima di programmare i giorni.");
+
+  const date = parseIsoDateLocal(dateIso);
+  if (!date) return;
+  const override = getScheduleOverride(normalized.id, dateIso);
+  const baseScheduled = baseTherapyApplies(normalized, date);
+  const currentlySelected = therapyApplies(normalized, date);
+
+  removeScheduleOverride(normalized.id, dateIso);
+
+  if (normalized.scheduleType === "manual") {
+    if (!currentlySelected) {
+      upsertScheduleOverride({
+        therapyId: normalized.id,
+        date: dateIso,
+        mode: "include",
+        times: normalizedTimes(normalized),
+        updatedAt: new Date().toISOString()
+      });
+    }
+  } else if (currentlySelected) {
+    if (baseScheduled) {
+      upsertScheduleOverride({
+        therapyId: normalized.id,
+        date: dateIso,
+        mode: "exclude",
+        times: [],
+        updatedAt: new Date().toISOString()
+      });
+    }
+  } else {
+    if (!baseScheduled) {
+      upsertScheduleOverride({
+        therapyId: normalized.id,
+        date: dateIso,
+        mode: "include",
+        times: normalizedTimes(normalized),
+        updatedAt: new Date().toISOString()
+      });
+    }
+  }
+
+  saveState();
+  renderCalendar();
+}
+
+function switchSelectedTherapyCalendarMode() {
+  const therapy = selectedCalendarTherapy();
+  if (!therapy) return;
+  if (!therapy.active) return showToast("Riattiva prima questa terapia.");
+
+  const normalized = normalizeTherapyRecord(therapy);
+
+  if (normalized.scheduleType === "manual") {
+    if (!confirm("Vuoi tornare al programma automatico settimanale? Le date scelte manualmente resteranno come eccezioni finché non le togli dal calendario.")) return;
+    therapy.scheduleType = "standard";
+    if (!therapy.days?.length) therapy.days = [0,1,2,3,4,5,6];
+    if (!therapy.startDate) therapy.startDate = localDateISO();
+    therapy.updatedAt = new Date().toISOString();
+    saveState();
+    renderCalendar();
+    showToast("Programma automatico riattivato.");
+    return;
+  }
+
+  if (!confirm("Vuoi usare SOLO i giorni che selezioni manualmente nel calendario per questo medicinale? I giorni automatici non saranno più considerati.")) return;
+
+  therapy.scheduleType = "manual";
+  therapy.days = [];
+  therapy.startDate = "";
+  therapy.endDate = "";
+  therapy.monthInterval = 1;
+
+  // Manteniamo solo inclusioni manuali già esistenti; le esclusioni non servono più.
+  state.scheduleOverrides = (state.scheduleOverrides || []).filter((item) =>
+    item.therapyId !== therapy.id || item.mode === "include"
+  );
+
+  therapy.updatedAt = new Date().toISOString();
+  saveState();
+  renderCalendar();
+  showToast("Calendario manuale attivato. Tocca i giorni in cui devi assumere il medicinale.");
+}
+
 function renderCalendar() {
   const grid = $("#calendarGrid");
   if (!grid) return;
+
+  const therapy = renderCalendarTherapyPicker();
+  updateCalendarModeInfo(therapy);
+
   const year = calendarCursor.getFullYear();
   const month = calendarCursor.getMonth();
-  const first = new Date(year, month, 1);
+  const first = new Date(year, month, 1, 12, 0, 0);
   const lastDay = new Date(year, month + 1, 0).getDate();
-  $("#calendarMonthLabel").textContent = new Intl.DateTimeFormat("it-IT", { month: "long", year: "numeric" }).format(first);
+  $("#calendarMonthLabel").textContent = new Intl.DateTimeFormat("it-IT", {
+    month: "long", year: "numeric"
+  }).format(first);
+
   const offset = (first.getDay() + 6) % 7;
   const cells = [];
-  for (let i=0;i<offset;i+=1) cells.push('<div class="calendar-day empty"></div>');
+  for (let i = 0; i < offset; i += 1) {
+    cells.push('<div class="calendar-day empty"></div>');
+  }
+
   const now = new Date();
-  for (let day=1; day<=lastDay; day+=1) {
+  let selectedInMonth = 0;
+  let manualChangesInMonth = 0;
+
+  for (let day = 1; day <= lastDay; day += 1) {
     const date = new Date(year, month, day, 12, 0, 0);
     const iso = localDateISO(date);
-    const doses = scheduledDosesForDate(date);
-    const complete = doses.length && doses.every((d) => d.log?.status === "taken");
-    const problematic = doses.length && date <= now && doses.some((d) => d.log?.status === "skipped" || (!d.log && doseMoment(d,date) < now));
-    const future = doses.length && date > now;
-    const cls = complete ? "complete" : problematic ? "partial" : future ? "future" : "";
-    const todayClass = iso === localDateISO(now) ? " today" : "";
-    const taken = doses.filter((d) => d.log?.status === "taken").length;
-    const summaries = calendarTherapySummaries(date);
-    const preview = summaries.slice(0, 2).map((item) =>
-      `<span class="calendar-med">${escapeHTML(item.therapy.name)} <small>${escapeHTML(item.times.join(" · "))}</small></span>`
-    ).join("");
-    const extra = summaries.length > 2 ? `<span class="calendar-more">+${summaries.length - 2}</span>` : "";
-    const manual = (state.scheduleOverrides || []).some((item) => item.date === iso);
-    cells.push(`<button class="calendar-day ${cls}${todayClass}${manual ? " manual-day" : ""}" data-calendar-date="${iso}" type="button" title="${doses.length} dosi programmate">
-      <span class="calendar-day-top"><span class="day-number">${day}</span>${manual ? `<span class="manual-dot" title="Modificato manualmente">✎</span>` : ""}</span>
-      ${preview}${extra}
-      ${doses.length ? `<span class="day-count">${taken}/${doses.length}</span>` : `<span class="day-empty">—</span>`}
-    </button>`);
+    const today = iso === localDateISO(now);
+    const { selected, override } = calendarSelectedDateState(therapy, date);
+    const allDoses = scheduledDosesForDate(date);
+    const totalTherapies = new Set(allDoses.map((dose) => dose.therapy.id)).size;
+    const effectiveTimes = therapy && selected ? effectiveTimesForDate(therapy, date) : [];
+
+    if (selected) selectedInMonth += 1;
+    if (override) manualChangesInMonth += 1;
+
+    const selectedClass = selected ? " therapy-date-selected" : "";
+    const manualClass = override ? " therapy-date-manual" : "";
+    const todayClass = today ? " today" : "";
+
+    cells.push(`
+      <button class="calendar-day therapy-picker-day${selectedClass}${manualClass}${todayClass}"
+        data-calendar-toggle-date="${iso}" type="button"
+        aria-pressed="${selected ? "true" : "false"}"
+        aria-label="${day} ${$("#calendarMonthLabel").textContent}${selected ? ", terapia impostata" : ""}">
+        <span class="picker-day-number">${day}</span>
+        <span class="picker-check">${selected ? "✓" : ""}</span>
+        ${selected && effectiveTimes.length ? `<span class="picker-time">${escapeHTML(effectiveTimes.join(" · "))}</span>` : ""}
+        ${totalTherapies ? `<span class="picker-total">${totalTherapies} ${totalTherapies === 1 ? "terapia" : "terapie"}</span>` : ""}
+        ${override ? `<span class="picker-manual-mark">✎</span>` : ""}
+      </button>`);
   }
+
   grid.innerHTML = cells.join("");
+
+  const summary = $("#calendarSelectedSummary");
+  if (summary) {
+    if (!therapy) {
+      summary.innerHTML = `<strong>Nessun medicinale disponibile</strong><p>Aggiungi una terapia e poi seleziona i giorni.</p>`;
+    } else {
+      const normalized = normalizeTherapyRecord(therapy);
+      const mode = normalized.scheduleType === "manual"
+        ? "Calendario manuale"
+        : normalized.scheduleType === "cyclic"
+          ? "Terapia ciclica"
+          : "Programma automatico";
+      summary.innerHTML = `
+        <div>
+          <span class="small-note">Medicinale selezionato</span>
+          <strong>${escapeHTML(normalized.name)}</strong>
+          <p>${escapeHTML(normalized.dose)} · ${escapeHTML(normalizedTimes(normalized).join(", ") || "nessun orario")}</p>
+        </div>
+        <div class="calendar-summary-numbers">
+          <span><strong>${selectedInMonth}</strong> giorni nel mese</span>
+          <span><strong>${manualChangesInMonth}</strong> modifiche manuali</span>
+          <span class="summary-mode">${escapeHTML(mode)}</span>
+        </div>`;
+    }
+  }
+
   const stats = monthStatistics(calendarCursor);
   $("#statsGrid").innerHTML = `
     <div class="stat-card adherence-card">
@@ -914,6 +1156,7 @@ function renderCalendar() {
     <div class="stat-card stat-taken"><span class="stat-icon">✓</span><strong>${stats.taken}</strong><span>Prese</span></div>
     <div class="stat-card stat-skipped"><span class="stat-icon">−</span><strong>${stats.skipped}</strong><span>Saltate</span></div>
     <div class="stat-card stat-missed"><span class="stat-icon">!</span><strong>${stats.missed}</strong><span>Non registrate</span></div>`;
+
   const worst = $("#worstTherapyCard");
   if (stats.worst) {
     worst.classList.remove("hidden");
@@ -1018,9 +1261,11 @@ function therapyCardHtml(therapy, { archived = false } = {}) {
         <div class="therapy-times">${therapy.times.map((time) => `<span class="chip time-chip">${escapeHTML(time)}</span>`).join("")}</div>
         <p class="schedule-copy">${therapy.days.length === 7 ? "Tutti i giorni" : therapy.days.map((d) => dayNames[d]).join(", ")}</p>
         <div class="therapy-badges">
-          ${normalizeTherapyRecord(therapy).scheduleType === "cyclic"
-            ? `<span class="chip recurrence-chip">Ciclo ${normalizeTherapyRecord(therapy).cycleDurationDays} gg · ogni ${normalizeTherapyRecord(therapy).cycleIntervalMonths} mesi · ${normalizeTherapyRecord(therapy).cycleCount} volte</span>`
-            : monthIntervalValue(therapy) === 2 ? `<span class="chip recurrence-chip">Mesi alterni</span>` : ""}
+          ${normalizeTherapyRecord(therapy).scheduleType === "manual"
+            ? `<span class="chip recurrence-chip">Calendario manuale</span>`
+            : normalizeTherapyRecord(therapy).scheduleType === "cyclic"
+              ? `<span class="chip recurrence-chip">Ciclo ${normalizeTherapyRecord(therapy).cycleDurationDays} gg · ogni ${normalizeTherapyRecord(therapy).cycleIntervalMonths} mesi · ${normalizeTherapyRecord(therapy).cycleCount} volte</span>`
+              : monthIntervalValue(therapy) === 2 ? `<span class="chip recurrence-chip">Mesi alterni</span>` : ""}
           ${stockEnabled(therapy) ? `<span class="chip stock-chip ${isLowStock(therapy) ? "low" : ""}">Scorta ${escapeHTML(stockText(therapy))}</span>` : ""}
           ${therapy.barcode ? `<span class="chip code-chip">Cod. ${escapeHTML(therapy.barcode)}</span>` : ""}
         </div>
@@ -1317,9 +1562,10 @@ async function saveTherapy(event) {
   const existing = state.therapies.find((item) => item.id === oldId);
   const days = $$("input[name='days']:checked").map((el) => Number(el.value));
   const times = [...new Set($$(".therapy-time").map((el) => el.value).filter(Boolean))].sort();
-  if (!days.length) return showToast("Seleziona almeno un giorno.");
+  const selectedScheduleType = $("#scheduleType")?.value || "standard";
+  if (selectedScheduleType !== "manual" && !days.length) return showToast("Seleziona almeno un giorno.");
   if (!times.length) return showToast("Inserisci almeno un orario.");
-  if ($("#endDate").value && $("#startDate").value > $("#endDate").value) return showToast("La data finale precede quella iniziale.");
+  if (selectedScheduleType !== "manual" && $("#endDate").value && $("#startDate").value > $("#endDate").value) return showToast("La data finale precede quella iniziale.");
 
   const therapy = {
     id: therapyId,
@@ -1335,11 +1581,11 @@ async function saveTherapy(event) {
     startDate: $("#startDate").value,
     endDate: $("#endDate").value,
     notes: $("#therapyNotes").value.trim(),
-    scheduleType: $("#scheduleType")?.value === "cyclic" ? "cyclic" : "standard",
+    scheduleType: selectedScheduleType === "manual" ? "manual" : selectedScheduleType === "cyclic" ? "cyclic" : "standard",
     cycleDurationDays: Math.max(1, Number.parseInt($("#cycleDurationDays")?.value || "14", 10) || 14),
     cycleIntervalMonths: Math.max(1, Number.parseInt($("#cycleIntervalMonths")?.value || "2", 10) || 2),
     cycleCount: Math.max(1, Number.parseInt($("#cycleCount")?.value || "3", 10) || 3),
-    monthInterval: $("#scheduleType")?.value === "cyclic" ? 1 : Math.max(1, Number.parseInt($("#monthInterval").value || "1", 10) || 1),
+    monthInterval: selectedScheduleType === "cyclic" || selectedScheduleType === "manual" ? 1 : Math.max(1, Number.parseInt($("#monthInterval").value || "1", 10) || 1),
     active: existing?.archived ? false : $("#therapyActive").checked,
     archived: existing?.archived === true,
     archivedAt: existing?.archivedAt || "",
@@ -1347,6 +1593,11 @@ async function saveTherapy(event) {
   };
   if (therapy.scheduleType === "cyclic") {
     therapy.endDate = cyclicFinalEndDate(therapy);
+  }
+  if (therapy.scheduleType === "manual") {
+    therapy.days = [];
+    therapy.startDate = "";
+    therapy.endDate = "";
   }
   if (!therapy.name || !therapy.dose) return showToast("Compila nome e dose.");
 
@@ -1381,6 +1632,7 @@ async function saveTherapy(event) {
   else state.therapies.push(therapy);
 
   if (!saveState()) return;
+  if ($("#view-calendar")?.classList.contains("active")) selectedCalendarTherapyId = therapyId;
   closeTherapyDialog();
   showToast(oldId ? "Terapia aggiornata." : "Terapia aggiunta.");
 }
@@ -1584,7 +1836,7 @@ function cloudPayload() {
       .map(({ id, name, dose, barcode, days, times, startDate, endDate, notes, monthInterval, scheduleType, cycleDurationDays, cycleIntervalMonths, cycleCount, active }) => ({
         id, name, dose, barcode, days, times, startDate, endDate, notes,
         monthInterval: monthIntervalValue({ monthInterval }),
-        scheduleType: scheduleType === "cyclic" ? "cyclic" : "standard",
+        scheduleType: scheduleType === "manual" ? "manual" : scheduleType === "cyclic" ? "cyclic" : "standard",
         cycleDurationDays: Math.max(1, Number.parseInt(cycleDurationDays || 14, 10) || 14),
         cycleIntervalMonths: Math.max(1, Number.parseInt(cycleIntervalMonths || 2, 10) || 2),
         cycleCount: Math.max(1, Number.parseInt(cycleCount || 3, 10) || 3),
@@ -2787,6 +3039,21 @@ function bindEvents() {
   });
   $("#calendarPrevBtn")?.addEventListener("click", () => { calendarCursor = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() - 1, 1); renderCalendar(); });
   $("#calendarNextBtn")?.addEventListener("click", () => { calendarCursor = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() + 1, 1); renderCalendar(); });
+  $("#calendarTodayBtn")?.addEventListener("click", () => { const now = new Date(); calendarCursor = new Date(now.getFullYear(), now.getMonth(), 1); renderCalendar(); });
+  $("#calendarTherapySelect")?.addEventListener("change", (event) => { selectedCalendarTherapyId = event.target.value; renderCalendar(); });
+  $("#calendarEditTherapyBtn")?.addEventListener("click", () => { const therapy = selectedCalendarTherapy(); if (therapy) openTherapyDialog(therapy.id); });
+  $("#calendarAddTherapyBtn")?.addEventListener("click", () => openTherapyDialog());
+  $("#calendarManualModeBtn")?.addEventListener("click", switchSelectedTherapyCalendarMode);
+  $("#calendarGrid")?.addEventListener("touchstart", (event) => { calendarSwipeStartX = event.touches?.[0]?.clientX ?? null; }, { passive: true });
+  $("#calendarGrid")?.addEventListener("touchend", (event) => {
+    if (calendarSwipeStartX == null) return;
+    const endX = event.changedTouches?.[0]?.clientX ?? calendarSwipeStartX;
+    const delta = endX - calendarSwipeStartX;
+    calendarSwipeStartX = null;
+    if (Math.abs(delta) < 70) return;
+    calendarCursor = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() + (delta < 0 ? 1 : -1), 1);
+    renderCalendar();
+  }, { passive: true });
   $("#calendarDayForm")?.addEventListener("submit", saveCalendarDay);
   $("#closeCalendarDayBtn")?.addEventListener("click", closeCalendarDayDialog);
   $("#cancelCalendarDayBtn")?.addEventListener("click", closeCalendarDayDialog);
@@ -2801,6 +3068,11 @@ function bindEvents() {
   });
 
   document.addEventListener("click", async (event) => {
+    const calendarToggleDay = event.target.closest("[data-calendar-toggle-date]");
+    if (calendarToggleDay) {
+      toggleSelectedTherapyDate(calendarToggleDay.dataset.calendarToggleDate);
+      return;
+    }
     const calendarDay = event.target.closest("[data-calendar-date]");
     if (calendarDay) {
       openCalendarDayDialog(calendarDay.dataset.calendarDate);
