@@ -174,3 +174,19 @@ Le statistiche generali sono spostate in una sezione richiudibile.
 
 Telegram e Cloudflare rispettano anche il calendario manuale.
 Cron consigliato: `*/15 * * * *`.
+
+
+## v28 – eliminazione delle copie duplicate
+
+Nel Calendario, dopo aver selezionato un medicinale:
+
+- se esistono più voci con lo stesso nome e dose appare “Elimina copia selezionata”;
+- se esistono copie realmente identiche per nome, dose, giorni, orari, periodicità e periodo,
+  appare anche “Pulisci copie duplicate”;
+- “Pulisci copie duplicate” mantiene la terapia selezionata ed elimina le copie identiche;
+- vengono rimossi anche eventuali log, posticipi, modifiche manuali del calendario e fotografia
+  appartenenti esclusivamente alla copia eliminata;
+- le altre terapie non vengono toccate.
+
+Cron Cloudflare invariato: `*/15 * * * *`.
+Il Worker non richiede modifiche rispetto alla v27/v26 per questa funzione.

@@ -8,7 +8,7 @@
   <title>Terapie in Orario</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=27">
+  <link rel="stylesheet" href="styles.css?v=28">
 </head>
 <body>
   <header class="app-header">
@@ -98,8 +98,11 @@
         </label>
         <div class="calendar-selected-actions">
           <button id="calendarEditTherapyBtn" class="secondary" type="button">Modifica medicinale</button>
+          <button id="calendarDeleteCopyBtn" class="secondary danger-outline hidden" type="button">Elimina copia selezionata</button>
+          <button id="calendarCleanCopiesBtn" class="secondary hidden" type="button">Pulisci copie duplicate</button>
           <button id="calendarAddTherapyBtn" class="secondary" type="button">+ Nuovo medicinale</button>
         </div>
+        <p id="calendarDuplicateHint" class="calendar-duplicate-hint hidden"></p>
         <div class="calendar-mode-box">
           <div>
             <span class="small-note">Modalità</span>
@@ -504,6 +507,6 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="app.js?v=27"></script>
+  <script src="app.js?v=28"></script>
 </body>
 </html>

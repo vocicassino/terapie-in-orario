@@ -881,6 +881,135 @@ function resetCalendarDay() {
   openCalendarDayDialog(dateIso);
 }
 
+
+function duplicateIdentityKey(therapy) {
+  return [
+    normalizeTherapyText(therapy?.name),
+    normalizeTherapyText(therapy?.dose)
+  ].join("|");
+}
+
+function duplicateGroupForTherapy(therapy) {
+  if (!therapy) return [];
+  const key = duplicateIdentityKey(therapy);
+  return (state.therapies || []).filter((item) =>
+    !item.archived && duplicateIdentityKey(item) === key
+  );
+}
+
+function exactDuplicateGroupForTherapy(therapy) {
+  if (!therapy) return [];
+  return (state.therapies || []).filter((item) =>
+    !item.archived &&
+    item.id !== therapy.id &&
+    sameTherapySchedule(item, therapy) &&
+    dateRangesOverlap(item, therapy)
+  );
+}
+
+async function removeTherapyCopyById(id, { removeLogs = true } = {}) {
+  const therapy = state.therapies.find((item) => item.id === id);
+  if (!therapy) return false;
+
+  state.therapies = state.therapies.filter((item) => item.id !== id);
+  state.scheduleOverrides = (state.scheduleOverrides || []).filter((item) => item.therapyId !== id);
+  state.snoozes = (state.snoozes || []).filter((item) => item.therapyId !== id);
+  if (removeLogs) {
+    state.logs = (state.logs || []).filter((item) => item.therapyId !== id);
+  }
+
+  try {
+    await deleteTherapyImage(id);
+  } catch (error) {
+    console.warn("Immagine della copia non rimossa", error);
+  }
+  replaceTherapyImageUrl(id, null);
+
+  if (selectedCalendarTherapyId === id) selectedCalendarTherapyId = "";
+  return saveState();
+}
+
+async function deleteSelectedCalendarCopy() {
+  const therapy = selectedCalendarTherapy();
+  if (!therapy) return;
+
+  const group = duplicateGroupForTherapy(therapy);
+  if (group.length <= 1) {
+    showToast("Questo medicinale non risulta avere copie.");
+    return;
+  }
+
+  const exact = exactDuplicateGroupForTherapy(therapy);
+  const detail = exact.length
+    ? "Questa voce risulta sovrapposta a un’altra copia con la stessa programmazione."
+    : "Esistono più voci con lo stesso nome e la stessa dose.";
+
+  const ok = confirm(
+    `Eliminare definitivamente questa copia?\n\n${therapy.name} — ${therapy.dose}\n${normalizedTimes(therapy).join(", ")}\n\n${detail}\n\nSaranno eliminate anche le registrazioni e le modifiche calendario appartenenti soltanto a questa copia. Le altre copie resteranno invariate.`
+  );
+  if (!ok) return;
+
+  await removeTherapyCopyById(therapy.id, { removeLogs: true });
+  renderCalendar();
+  showToast("Copia eliminata.");
+}
+
+async function cleanExactDuplicateCopies() {
+  const therapy = selectedCalendarTherapy();
+  if (!therapy) return;
+
+  const exact = exactDuplicateGroupForTherapy(therapy);
+  if (!exact.length) {
+    showToast("Non ci sono copie identiche da eliminare automaticamente.");
+    return;
+  }
+
+  const list = exact.map((item, index) =>
+    `${index + 1}. ${item.name} — ${item.dose} · ${normalizedTimes(item).join(", ")}`
+  ).join("\n");
+
+  const ok = confirm(
+    `Ho trovato ${exact.length} ${exact.length === 1 ? "copia identica" : "copie identiche"} della terapia selezionata.\n\nVerrà mantenuta la voce attualmente selezionata e saranno eliminate queste copie:\n\n${list}\n\nContinuare?`
+  );
+  if (!ok) return;
+
+  for (const duplicate of exact) {
+    await removeTherapyCopyById(duplicate.id, { removeLogs: true });
+  }
+  selectedCalendarTherapyId = therapy.id;
+  renderCalendar();
+  showToast(exact.length === 1 ? "Copia duplicata eliminata." : `${exact.length} copie duplicate eliminate.`);
+}
+
+function updateCalendarDuplicateControls(therapy) {
+  const deleteBtn = $("#calendarDeleteCopyBtn");
+  const cleanBtn = $("#calendarCleanCopiesBtn");
+  const hint = $("#calendarDuplicateHint");
+  if (!deleteBtn || !cleanBtn || !hint) return;
+
+  if (!therapy) {
+    deleteBtn.classList.add("hidden");
+    cleanBtn.classList.add("hidden");
+    hint.classList.add("hidden");
+    return;
+  }
+
+  const group = duplicateGroupForTherapy(therapy);
+  const exact = exactDuplicateGroupForTherapy(therapy);
+
+  deleteBtn.classList.toggle("hidden", group.length <= 1);
+  cleanBtn.classList.toggle("hidden", exact.length === 0);
+
+  if (group.length > 1) {
+    hint.classList.remove("hidden");
+    hint.innerHTML = exact.length
+      ? `⚠️ <strong>${group.length} copie</strong> di ${escapeHTML(therapy.name)}. ${exact.length} ${exact.length === 1 ? "è identica" : "sono identiche"} alla voce selezionata.`
+      : `ℹ️ Sono presenti <strong>${group.length} voci</strong> con lo stesso nome e la stessa dose. Controlla prima di eliminarle.`;
+  } else {
+    hint.classList.add("hidden");
+  }
+}
+
 function availableCalendarTherapies() {
   return (state.therapies || [])
     .filter((therapy) => !therapy.archived)
@@ -910,6 +1039,7 @@ function renderCalendarTherapyPicker() {
     select.disabled = true;
     $("#calendarEditTherapyBtn").disabled = true;
     $("#calendarManualModeBtn").disabled = true;
+    updateCalendarDuplicateControls(null);
     return null;
   }
 
@@ -936,6 +1066,7 @@ function renderCalendarTherapyPicker() {
   selectedCalendarTherapyId = select.value;
   $("#calendarEditTherapyBtn").disabled = !selected;
   $("#calendarManualModeBtn").disabled = !selected || !selected.active;
+  updateCalendarDuplicateControls(selected);
   return selected;
 }
 
@@ -3042,6 +3173,8 @@ function bindEvents() {
   $("#calendarTodayBtn")?.addEventListener("click", () => { const now = new Date(); calendarCursor = new Date(now.getFullYear(), now.getMonth(), 1); renderCalendar(); });
   $("#calendarTherapySelect")?.addEventListener("change", (event) => { selectedCalendarTherapyId = event.target.value; renderCalendar(); });
   $("#calendarEditTherapyBtn")?.addEventListener("click", () => { const therapy = selectedCalendarTherapy(); if (therapy) openTherapyDialog(therapy.id); });
+  $("#calendarDeleteCopyBtn")?.addEventListener("click", deleteSelectedCalendarCopy);
+  $("#calendarCleanCopiesBtn")?.addEventListener("click", cleanExactDuplicateCopies);
   $("#calendarAddTherapyBtn")?.addEventListener("click", () => openTherapyDialog());
   $("#calendarManualModeBtn")?.addEventListener("click", switchSelectedTherapyCalendarMode);
   $("#calendarGrid")?.addEventListener("touchstart", (event) => { calendarSwipeStartX = event.touches?.[0]?.clientX ?? null; }, { passive: true });

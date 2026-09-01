@@ -1151,3 +1151,23 @@ input,textarea,select { border-radius:13px; background:#fff; }
     justify-content: flex-start;
   }
 }
+
+
+/* ===== v28 gestione copie ===== */
+.danger-outline {
+  border-color: #e8bcbc !important;
+  background: #fff6f6 !important;
+  color: #a43a3a !important;
+}
+.calendar-duplicate-hint {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #fff6dc;
+  color: #69551b;
+  font-size: .8rem;
+  line-height: 1.4;
+}
+.calendar-duplicate-hint strong {
+  color: #5c470e;
+}
